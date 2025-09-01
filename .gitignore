@@ -4,10 +4,10 @@ log/
 conf_backups/*.bak.*
 *.bak.*
 1_output/
-aux/
 tmp/
 NAMD/
 __pycache__/
 *.pyc
 gen_scripts/gamd
 gen_scripts/gen_gamd_scripts.sh
+.DS_Store
