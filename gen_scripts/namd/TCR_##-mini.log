@@ -1,0 +1,31 @@
+Charm++> Running on MPI version: 3.0
+Charm++> level of thread support used: MPI_THREAD_SINGLE (desired: MPI_THREAD_SINGLE)
+Charm++> Running in non-SMP mode: numPes 48
+Charm++> Using recursive bisection (scheme 3) for topology aware partitions
+Converse/Charm++ Commit ID: v6.7.0-0-g46f867c-namd-charm-6.7.0-build-2015-Dec-21-45876
+Warning> Randomization of stack pointer is turned on in kernel, thread migration may not work! Run 'echo 0 > /proc/sys/kernel/randomize_va_space' as root to disable it, or try run with '+isomalloc_sync'.  
+CharmLB> Load balancer assumes all CPUs are same.
+Charm++> Running on 2 unique compute nodes (56-way SMP).
+Charm++> cpu topology info is gathered in 0.009 seconds.
+Info: NAMD 2.11 for Linux-x86_64-MPI
+Info: 
+Info: Please visit http://www.ks.uiuc.edu/Research/namd/
+Info: for updates, documentation, and support information.
+Info: 
+Info: Please cite Phillips et al., J. Comp. Chem. 26:1781-1802 (2005)
+Info: in all publications reporting results obtained with NAMD.
+Info: 
+Info: Based on Charm++/Converse 60700 for mpi-linux-x86_64
+Info: Built Thu Oct 6 22:40:55 CDT 2016 by jhskone on midway2-login1.rcc.local
+Info: 1 NAMD  2.11  Linux-x86_64-MPI  48    midway2-gpu01.rcc.local  kangheelee
+Info: Running on 48 processors, 48 nodes, 2 physical nodes.
+Info: CPU topology information available.
+Info: Charm++/Converse parallel runtime startup completed at 0.0179369 s
+Info: 392.824 MB of memory in use based on /proc/self/stat
+Info: Configuration file is TCR_##-mini.conf
+FATAL ERROR: Unable to access config file TCR_##-mini.conf
+[0] Stack Traceback:
+  [0:0] _Z8NAMD_diePKc+0x93  [0x646823]
+  [0:1] main+0x371  [0x64c061]
+  [0:2] __libc_start_main+0xf5  [0x7f4035cc4555]
+  [0:3]   [0x5a0169]

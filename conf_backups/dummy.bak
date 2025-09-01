@@ -1,0 +1,9 @@
+# IMPACT - Interactive Molecular Processing and Analysis for Contact/TCRs
+# dummy .BAK file to index folder
+
+PDB_DIR = NAMD/pdb_files_ranked_0
+PDB_PROC_DIR = 1_output/
+
+SLURM_ACCOUNT = pi-haddadian
+SLURM_PARTITION = caslake
+SLURM_CMD = sbatch
