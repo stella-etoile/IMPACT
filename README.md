@@ -256,7 +256,6 @@ The main menu shows items that are placeholders for future flows:
 - Batch composer to stitch dependent arrays (e.g., `equil → npt1..npt6 → prod`) with `--dependency=afterok` chains
 - Persistent run DB for resuming/skip-done logic
 - Inline viewers for generated artifacts (contact maps, summaries)
-- Themeable UI and resizable panes
 - Unit tests for config parse/restore and SLURM helpers
 
 ---
