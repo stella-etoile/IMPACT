@@ -1,13 +1,15 @@
-log/
-*.out
-*.err
 conf_backups/*.bak.*
 *.bak.*
+*.pyc
+.DS_Store
+# *.out
+# *.err
+
+log/
 1_output/
+2_output/
 tmp/
 NAMD/
 __pycache__/
-*.pyc
-gen_scripts/gamd
+gen_scripts/gamd/
 gen_scripts/gen_gamd_scripts.sh
-.DS_Store

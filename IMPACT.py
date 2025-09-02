@@ -7,13 +7,14 @@ BIN_DIR = os.path.join(BASE_DIR, "bin")
 if BIN_DIR not in sys.path:
     sys.path.insert(0, BIN_DIR)
 
-from impact_setup_menu import run_setup_namd
+from impact_setup_pdb import run_setup_pdb
+from impact_setup_namd import run_setup_namd
 from impact_config_editor import run_config_editor
 
 TITLE = "IMPACT – Interactive Molecular Processing and Analysis for Contact/TCRs"
-MENU = ["1) Setup NAMD", "2) Run NAMD", "3) Run GaMD", "4) Change config"]
+MENU = ["1) Setup PDB", "2) Setup NAMD", "3) Run NAMD", "4) Run GaMD", "5) Change config"]
 EXIT = "0) Exit"
-CONTROLS = "↑/↓ move • Enter select • 0–4 quick • Esc=Exit/Back"
+CONTROLS = "↑/↓ move • Enter select • 0–5 quick • Esc=Exit/Back"
 
 MIN_W = 87
 MIN_H = 26
@@ -103,7 +104,7 @@ def menu(stdscr, hint_attr, warn_attr):
             idx = (idx + 1) % (len(MENU) + 1)
         elif k in (10, 13, curses.KEY_ENTER):
             return idx
-        elif k in (ord('0'), ord('1'), ord('2'), ord('3'), ord('4')):
+        elif k in (ord('0'), ord('1'), ord('2'), ord('3'), ord('4'), ord('5')):
             if k == ord('0'):
                 return len(MENU)
             return int(chr(k)) - 1
@@ -119,8 +120,10 @@ def main(stdscr):
         if choice == len(MENU) or choice is None:
             break
         if choice == 0:
+            run_setup_pdb(stdscr, hint_attr)
+        elif choice == 1:
             run_setup_namd(stdscr, hint_attr)
-        elif choice == 3:
+        elif choice == 4:
             run_config_editor(stdscr, hint_attr)
         else:
             pass

@@ -11,9 +11,9 @@ from typing import List, Tuple, Optional
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 DEFAULT_CONF = os.path.join(ROOT_DIR, "IMPACT.conf")
-SETUP_SH = os.path.join(ROOT_DIR, "bin", "impact_setup.sh")
+SETUP_SH = os.path.join(ROOT_DIR, "bin", "impact_setup_pdb.sh")
 
-SUBTITLE = "Setup NAMD"
+SUBTITLE = "Setup PDB"
 EXAMPLES_ADD = "Add: e.g., 06 07,08 09"
 EXAMPLES_REMOVE = "Remove: e.g., 06 07,08 09"
 
@@ -588,7 +588,7 @@ def run_slurm_submit(selections, conf_path, script_path):
 
 # ---------- Top-level TUI ----------
 
-def run_setup_namd(stdscr, inherited_hint_attr=None):
+def run_setup_pdb(stdscr, inherited_hint_attr=None):
     pdb_dir, pdb_proc_dir, slurm_cfg, has_slurm, conf_path = read_config()
     curses.curs_set(0)
     stdscr.keypad(True)
@@ -739,7 +739,7 @@ def run_setup_namd(stdscr, inherited_hint_attr=None):
             return
 
 def main():
-    curses.wrapper(run_setup_namd)
+    curses.wrapper(run_setup_pdb)
 
 if __name__ == "__main__":
     main()
