@@ -42,18 +42,18 @@ abspath() {
   esac
 }
 
-# Inputs (prepared systems) come from PDB_PROC_DIR (default 1_output)
 PDB_PROC_DIR_REL="$(get_conf 'PDB_PROC_DIR')"
 input_src_root="$(abspath "${PDB_PROC_DIR_REL:-1_output}")"
 
-# Outputs go to NAMD_PROC_DIR (default 2_output)
 NAMD_PROC_DIR_REL="$(get_conf 'NAMD_PROC_DIR')"
 namd_root="$(abspath "${NAMD_PROC_DIR_REL:-2_output}")"
 
-# Generator support dirs/files:
 script_dir="$(abspath "gen_scripts")"
 aux_dir="$(abspath "aux")"
 run_gen_namd="${aux_dir}/run_gen_namd.sh"
+
+SLURM_ACCOUNT_VAL="$(get_conf 'SLURM_ACCOUNT')"
+SLURM_PARTITION_VAL="$(get_conf 'SLURM_PARTITION')"
 
 # -------------------- selection list --------------------
 declare -a selections
@@ -93,7 +93,7 @@ fi
 
 mkdir -p "$namd_root"
 
-# -------------------- main (local) --------------------
+# -------------------- helpers --------------------
 copy_required() {
   local src="$1" dst="$2"
   if [[ ! -f "$src" ]]; then
@@ -105,6 +105,39 @@ copy_required() {
   echo "  [✓] Copied $(basename "$src")"
 }
 
+inject_slurm_headers() {
+  local file="$1"
+  local part="$2"
+  local acct="$3"
+
+  local tmpf="${file}.tmp"
+  awk -v part="$part" -v acct="$acct" '
+    NR==1{
+      print $0
+      printed=0
+      # only add if not already present
+      p_seen=0; a_seen=0
+      next
+    }
+    {
+      body = body $0 ORS
+    }
+    END{
+      # Re-scan first few lines of body to detect existing lines
+      split(body, L, ORS)
+      for(i=1;i<=length(L)&&i<=10;i++){
+        if(L[i] ~ /^#SBATCH[[:space:]]+--partition=/) p_seen=1
+        if(L[i] ~ /^#SBATCH[[:space:]]+--account=/)   a_seen=1
+      }
+      if(part != "" && p_seen==0) print "#SBATCH --partition=" part
+      if(acct != "" && a_seen==0) print "#SBATCH --account=" acct
+      printf "%s", body
+    }
+  ' "$file" > "$tmpf"
+  mv "$tmpf" "$file"
+}
+
+# -------------------- main (local) --------------------
 echo "==> Trial: ${TRIAL}"
 echo "==> PDB_PROC_DIR (input): ${input_src_root}"
 echo "==> NAMD_PROC_DIR (output root): ${namd_root}"
@@ -115,23 +148,31 @@ for prefix in "${selections[@]}"; do
   echo "---- Processing: ${prefix} (trial ${TRIAL}) ----"
 
   combined_prefix="${prefix}_${TRIAL}"
-  src_dir="${input_src_root}/${prefix}"       # inputs live in 1_output/<prefix>/
-  dest_dir="${namd_root}/${combined_prefix}"  # outputs in 2_output/<prefix>_<trial>/
+  src_dir="${input_src_root}/${prefix}"
+  dest_dir="${namd_root}/${combined_prefix}"
 
   mkdir -p "${dest_dir}/mini"
 
-  # required artifacts from 1_output/<prefix>/ (files already suffixed with _<trial>)
   copy_required "${src_dir}/${combined_prefix}_pbc.txt"                        "${dest_dir}/${combined_prefix}_pbc.txt"                             || { echo "  Skipping ${prefix} due to missing files."; echo; continue; }
   copy_required "${src_dir}/${combined_prefix}_ionized.psf"                    "${dest_dir}/${combined_prefix}_ionized.psf"                         || { echo "  Skipping ${prefix} due to missing files."; echo; continue; }
   copy_required "${src_dir}/${combined_prefix}_solvated_ionized_centered.pdb"  "${dest_dir}/mini/${combined_prefix}_solvated_ionized_centered.pdb" || { echo "  Skipping ${prefix} due to missing files."; echo; continue; }
   copy_required "${src_dir}/${combined_prefix}_restrain.pdb"                   "${dest_dir}/mini/${combined_prefix}_restrain.pdb"                   || { echo "  Skipping ${prefix} due to missing files."; echo; continue; }
 
-  # stage & run generator inside destination
   cp -f "$run_gen_namd" "${dest_dir}/"
   (
     cd "${dest_dir}"
     chmod +x run_gen_namd.sh
     ./run_gen_namd.sh "${script_dir}" "${prefix}" "${TRIAL}"
+
+    for f in *.sh; do
+      [[ -f "$f" ]] || continue
+      first="$(head -n1 "$f")"
+      if [[ "$first" != "#!"* ]]; then
+        printf '#!/bin/bash\n%s\n' "$(cat "$f")" > "$f"
+      fi
+      inject_slurm_headers "$f" "${SLURM_PARTITION_VAL}" "${SLURM_ACCOUNT_VAL}"
+    done
+
     rm -f run_gen_namd.sh
   )
 

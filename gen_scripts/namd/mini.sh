@@ -1,13 +1,9 @@
 #!/bin/sh
 
 #SBATCH --job-name=TCR_##_mini
-#SBATCH --time=00:08:00
-#SBATCH --partition=caslake
+#SBATCH --time=00:15:00
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=28
-#SBATCH --account=pi-haddadian
-#SBATCH --mail-user=kangheelee@rcc.uchicago.edu
-#SBATCH --mail-type=NONE
 #SBATCH --output=TCR_##-mini.out
 #SBATCH --error=TCR_##-mini.err
 

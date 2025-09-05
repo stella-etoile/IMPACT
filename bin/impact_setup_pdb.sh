@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# -------------------- arg parsing --------------------
 MODE="local"
 CONF_PATH="./IMPACT.conf"
 SELECTION_FILE=""
@@ -19,7 +18,6 @@ done
 
 SELECTION_ENV="${SELECTION:-}"
 
-# -------------------- config & paths --------------------
 if [[ ! -f "$CONF_PATH" ]]; then
   echo "Missing IMPACT.conf at $CONF_PATH" >&2
   exit 1
@@ -57,7 +55,6 @@ aux_dir="$(abspath "aux")"
 log_dir="$(abspath "log")"
 mkdir -p "$pdb_proc_dir" "$log_dir"
 
-# -------------------- selection list --------------------
 declare -a selections
 if [[ -n "$SELECTION_FILE" ]]; then
   if [[ ! -f "$SELECTION_FILE" ]]; then
@@ -80,7 +77,6 @@ for n in "${selections[@]}"; do
   fi
 done
 
-# -------------------- SLURM checks (honor --force) --------------------
 if [[ "$MODE" == "slurm" && $FORCE -eq 0 ]]; then
   if [[ -z "${SLURM_ACCOUNT:-}" || -z "${SLURM_PARTITION:-}" || -z "${SLURM_CMD:-}" ]]; then
     echo "SLURM not configured in IMPACT.conf" >&2
@@ -88,7 +84,6 @@ if [[ "$MODE" == "slurm" && $FORCE -eq 0 ]]; then
   fi
 fi
 
-# -------------------- local mode --------------------
 if [[ "$MODE" == "local" ]]; then
   module load vmd || true
   for name in "${selections[@]}"; do
@@ -100,17 +95,16 @@ if [[ "$MODE" == "local" ]]; then
   exit 0
 fi
 
-# -------------------- slurm mode (one job per selection) --------------------
 : "${SLURM_CMD:=sbatch}"
 
-for name in "${selections[@]}"; do
-  job_name="IMPACT_${name}"
+submit_job() {
+  local name="$1"
   "$SLURM_CMD" <<EOF
 #!/bin/bash
-#SBATCH --job-name=${job_name}
-#SBATCH --time=00:10:00
+#SBATCH --job-name=IMPACT_${name}
+#SBATCH --time=00:00:30
 #SBATCH --partition=${SLURM_PARTITION:-caslake}
-#SBATCH --account=${SLURM_ACCOUNT:-unknown}
+#SBATCH --account=${SLURM_ACCOUNT:-}
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
 #SBATCH --output=${log_dir}/%x.out
@@ -127,6 +121,10 @@ mkdir -p "\${base_dir}"
 cp -f "\${pdb_dir}/\${name}.pdb" "\${base_dir}/"
 vmd -dispdev text -e "\${aux_dir}/init_setup.tcl" -args "\${base_dir}" "\${gen_sys_dir}" "\${name}" "1"
 EOF
+}
+
+for name in "${selections[@]}"; do
+  submit_job "$name"
 done
 
 exit 0

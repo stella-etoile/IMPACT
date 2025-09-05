@@ -2,12 +2,8 @@
 
 #SBATCH --job-name=TCR_##_equil
 #SBATCH --time=03:30:00
-#SBATCH --partition=caslake
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=48
-#SBATCH --account=workshop-aiml
-#SBATCH --mail-user=kangheelee@rcc.uchicago.edu
-#SBATCH --mail-type=END,FAIL
 #SBATCH --output=TCR_##-equil.out
 #SBATCH --error=TCR_##-equil.err
 
