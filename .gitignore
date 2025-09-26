@@ -11,5 +11,5 @@ log/
 tmp/
 NAMD/
 __pycache__/
-gen_scripts/gamd/
-gen_scripts/gen_gamd_scripts.sh
+# gen_scripts/gamd/
+# gen_scripts/gen_gamd_scripts.sh
