@@ -11,6 +11,7 @@ from impact_setup_pdb import run_setup_pdb
 from impact_setup_namd import run_setup_namd
 from impact_config_editor import run_config_editor
 from impact_run_namd import run_run_namd
+from impact_run_gamd import run_run_gamd
 
 TITLE = "IMPACT – Interactive Molecular Processing and Analysis for Contact/TCRs"
 MENU = ["1) Setup PDB", "2) Setup NAMD", "3) Run NAMD", "4) Run GaMD", "5) Change config"]
@@ -126,6 +127,8 @@ def main(stdscr):
             run_setup_namd(stdscr, hint_attr)
         elif choice == 2:
             run_run_namd(stdscr, hint_attr)
+        elif choice == 3:
+            run_run_gamd(stdscr, hint_attr)
         elif choice == 4:
             run_config_editor(stdscr, hint_attr)
         else:
