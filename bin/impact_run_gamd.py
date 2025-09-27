@@ -6,6 +6,8 @@ from typing import Optional, List, Tuple
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 DEFAULT_CONF = os.path.join(ROOT_DIR, "IMPACT.conf")
+LOG_DIR = os.path.join(ROOT_DIR, "log")
+os.makedirs(LOG_DIR, exist_ok=True)
 
 SUBTITLE = "Run GaMD"
 EXAMPLES_ADD = "Add: e.g., TCR_06_1 TCR_07_2"
@@ -22,6 +24,7 @@ CFG_KEYS = [
     "QOS",
     "WALL_TIME_GAMD_EQUIL",
     "WALL_TIME_GAMD_PROD",
+    "SBATCH_EXTRA",
 ]
 
 def find_conf():
@@ -245,10 +248,16 @@ def parse_jobid(s):
     m = re.search(r"\b(\d{3,})\b", (s or "").strip())
     return m.group(1) if m else "?"
 
-def sbatch_submit(sbatch, script_path, extra=None, dependency=None, cwd=None):
+def sbatch_submit(sbatch, script_path, extra=None, dependency=None, cwd=None, job_name=None, out_path=None, err_path=None):
     cmd = [sbatch]
     if dependency:
         cmd.append(f"--dependency=afterok:{dependency}")
+    if job_name:
+        cmd += ["--job-name", job_name]
+    if out_path:
+        cmd += ["--output", out_path]
+    if err_path:
+        cmd += ["--error", err_path]
     if extra:
         cmd += extra
     cmd.append(script_path)
@@ -320,22 +329,157 @@ def build_gamd_chain(run_dir, combined, base_dir, conf):
     scripts = {"equil": equil_sh, "prod": prod_sh, "npt": [os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh") for i in range(1, 9) if os.path.isfile(os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh"))], "dir": gamd_dir}
     return True, "ok", scripts
 
-def submit_gamd_chain(sbatch, sbatch_extra, scripts):
-    ok1, jid1, out1 = sbatch_submit(sbatch, scripts["equil"], extra=sbatch_extra, cwd=os.path.dirname(scripts["equil"]))
-    if not ok1:
-        return False, f"equil submit failed: {out1}"
-    ok2, jid2, out2 = sbatch_submit(sbatch, scripts["prod"], extra=sbatch_extra, dependency=jid1, cwd=os.path.dirname(scripts["prod"]))
-    if not ok2:
-        return False, f"prod submit failed: {out2}"
-    dep = jid2
-    jids = [("equil", jid1), ("prod", jid2)]
+def draw_progress(stdscr, y0, name, idx, total, started_at, item_started_at, avg_sec, out_tail, err_tail, hint_attr, err_attr, split_label, extra_line=None):
+    h, w = stdscr.getmaxyx()
+    elapsed = int(time.time() - started_at)
+    cur_dt = time.time() - item_started_at
+    done = idx - 1
+    remain_count = max(0, total - idx)
+    est = int(remain_count * avg_sec) if avg_sec > 0 else 0
+    pct = int((done / total) * 100) if total > 0 else 0
+    bar_w = max(20, w - 10)
+    filled = max(0, int((pct / 100.0) * (bar_w - 2)))
+    bar = "[" + "#" * filled + "-" * ((bar_w - 2) - filled) + "]"
+    stdscr.clear()
+    try:
+        stdscr.addstr(y0, 2, "Running… (q/Esc=cancel, v=logs, s=split)", hint_attr)
+        if extra_line:
+            stdscr.addstr(y0, 60, f"{extra_line}", hint_attr)
+        stdscr.addstr(y0 + 1, 2, f"{idx}/{total} • {name} • {cur_dt:.1f}s")
+        stdscr.addstr(y0 + 2, 2, f"{pct:3d}% {bar}")
+        stdscr.addstr(y0 + 3, 2, f"ETA ~ {est//60:d}m {est%60:d}s • Elapsed {elapsed//60}m {elapsed%60}s")
+        y = y0 + 5
+        stdscr.addstr(y, 2, "── stderr ", err_attr); y += 1
+        for ln in err_tail:
+            if y >= h - 2: break
+            stdscr.addstr(y, 2, ln, err_attr); y += 1
+        if y < h - 3:
+            stdscr.addstr(y, 2, f"── stdout ({split_label}) ", hint_attr); y += 1
+            for ln in out_tail:
+                if y >= h - 1: break
+                stdscr.addstr(y, 2, ln); y += 1
+    except curses.error:
+        pass
+    stdscr.refresh()
+
+def _run(cmd: List[str]) -> Tuple[int, str, str]:
+    try:
+        res = subprocess.run(cmd, text=True, capture_output=True)
+        return res.returncode, res.stdout or "", res.stderr or ""
+    except FileNotFoundError:
+        return 127, "", f"{cmd[0]} not found"
+    except Exception as e:
+        return 1, "", str(e)
+
+def parse_jobid_from_sbatch(out: str) -> Optional[str]:
+    s = (out or "").strip()
+    m = re.search(r"Submitted\s+batch\s+job\s+(\d+)", s)
+    if m: return m.group(1)
+    m = re.search(r"\b(\d{5,})\b", s)
+    return m.group(1) if m else None
+
+_TERMINAL = {"COMPLETED","FAILED","CANCELLED","TIMEOUT","OUT_OF_MEMORY","PREEMPTED","BOOT_FAIL"}
+
+def slurm_state(jobid: str) -> Optional[str]:
+    rc, out, err = _run(["sacct", "-j", jobid, "-n", "--format=State"])
+    if rc == 0 and out.strip() and "disabled" not in (out+err).lower():
+        return out.strip().splitlines()[0].split()[0]
+    rc, out, _ = _run(["scontrol", "show", "job", jobid])
+    if rc == 0 and out:
+        m = re.search(r"JobState=([A-Za-z_]+)", out)
+        if m:
+            return m.group(1)
+    rc, out, _ = _run(["squeue", "-j", jobid, "-h", "-o", "%T"])
+    if rc == 0:
+        st = out.strip()
+        if st:
+            return st
+    return "UNKNOWN_GONE"
+
+def is_terminal(state: Optional[str]) -> bool:
+    if not state: return False
+    u = state.upper()
+    return u in _TERMINAL or u == "UNKNOWN_GONE"
+
+def slurm_log_paths(jobname: str) -> Tuple[str, str]:
+    outp = os.path.join(LOG_DIR, f"{jobname}.out")
+    errp = os.path.join(LOG_DIR, f"{jobname}.err")
+    return outp, errp
+
+def submit_gamd_chain_with_monitor(stdscr, sbatch, sbatch_extra, scripts, combined, hint_attr, err_attr):
+    steps = [("equil", scripts["equil"]), ("prod", scripts["prod"])]
     for i, sh in enumerate(scripts["npt"], start=1):
-        ok, jid, out = sbatch_submit(sbatch, sh, extra=sbatch_extra, dependency=dep, cwd=os.path.dirname(sh))
+        steps.append((f"npt{i}", sh))
+    jseq = []
+    dep = None
+    for label, sh in steps:
+        jname = f"IMPACT_GAMD_{combined}_{label}"
+        outp, errp = slurm_log_paths(jname)
+        os.makedirs(LOG_DIR, exist_ok=True)
+        open(outp, "a").close(); open(errp, "a").close()
+        extra = list(sbatch_extra or [])
+        ok, jid, out = sbatch_submit(
+            sbatch,
+            sh,
+            extra=extra,
+            dependency=dep,
+            cwd=os.path.dirname(sh),
+            job_name=jname,
+            out_path=outp,
+            err_path=errp,
+        )
         if not ok:
-            return False, f"npt{i} submit failed: {out}"
-        jids.append((f"npt{i}", jid))
+            return False, f"{label} submit failed: {out}"
+        jseq.append((label, jid, jname, outp, errp))
         dep = jid
-    return True, ", ".join([f"{k}={v}" for k, v in jids])
+    total = len(jseq)
+    t_start = time.time()
+    times = []
+    splits = [(0.7, 0.3), (0.5, 0.5), (0.3, 0.7)]
+    split_idx = 0
+    verbose = True
+    stdscr.nodelay(True)
+    try:
+        for idx, (label, jid, jname, outp, errp) in enumerate(jseq, 1):
+            t0 = time.time()
+            while True:
+                try:
+                    ch = stdscr.getch()
+                    if ch in (27, ord('q')):
+                        _run(["scancel", jid])
+                        stdscr.nodelay(False)
+                        return False, f"Cancelled {combined} at {label}"
+                    elif ch in (ord('v'), ord('V')):
+                        verbose = not verbose
+                    elif ch in (ord('s'), ord('S')):
+                        split_idx = (split_idx + 1) % len(splits)
+                except curses.error:
+                    pass
+                state = slurm_state(jid) or "SUBMITTED"
+                h, w = stdscr.getmaxyx()
+                y0 = 2
+                available_rows = max(0, (h - (y0 + 5)) - 2)
+                if verbose and available_rows >= 6:
+                    so, se = splits[split_idx]
+                    out_n = max(5, int(available_rows * so))
+                    err_n = max(5, available_rows - out_n)
+                    out_tail = tail_lines(outp, n=out_n, w=w)
+                    err_tail = tail_lines(errp, n=err_n, w=w)
+                    split_label = f"{int(so*100)}/{int(se*100)}"
+                else:
+                    out_tail = tail_lines(outp, n=5, w=w)
+                    err_tail = tail_lines(errp, n=5, w=w)
+                    split_label = "compact"
+                avg = (sum(times) / len(times)) if times else max(1.0, time.time() - t0)
+                draw_progress(stdscr, y0, f"{combined} [{label}] [{state}]", idx, total, t_start, t0, avg, out_tail, err_tail, hint_attr, err_attr, split_label)
+                if is_terminal(state):
+                    dt = time.time() - t0
+                    times.append(dt)
+                    break
+                time.sleep(0.5)
+    finally:
+        stdscr.nodelay(False)
+    return True, "ok"
 
 def compute_input_y(stdscr, names, ready, selection):
     h, w = stdscr.getmaxyx()
@@ -360,7 +504,7 @@ def draw(stdscr, title, hint_attr, namd_proc_dir, names, ready, selection, curso
         stdscr.addstr(5, 2, "Menu: ↑/↓ or j/k move • 1–6 shortcuts • At trial: ↑/↓ to change", hint_attr)
         stdscr.addstr(6, 2, "Systems: ←/→ move • Enter toggles add/remove • ←/→ moves between systems ⇄ trial ⇄ menu", hint_attr)
         y = 8
-        for k in CFG_KEYS:
+        for k in ["NAMD_PROC_DIR","SLURM_ACCOUNT","SLURM_PARTITION","SLURM_CMD","EXCLUDE","NTASKS_PER_NODE","NUM_GPU","QOS","WALL_TIME_GAMD_EQUIL","WALL_TIME_GAMD_PROD"]:
             v = cfgs.get(k, "")
             s = f"{k}: {v}"
             stdscr.addstr(y, 2, s[: max(0, w - 4)], hint_attr)
@@ -481,6 +625,8 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
                     focus = "proc"
                 else:
                     menu_cursor = (menu_cursor - 1) % options_len
+            elif k in (ord('k'),) and focus == "trial":
+                trial_num = max(1, trial_num - 1)
             elif focus == "trial":
                 trial_num = max(1, trial_num - 1)
         elif k in (curses.KEY_DOWN, ord('j')):
@@ -581,14 +727,14 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
                         failc += 1
                         last = f"{combined}: {det_b}"
                         continue
-                    ok_s, det_s = submit_gamd_chain(sbatch, sbatch_extra, scripts)
+                    ok_s, det_s = submit_gamd_chain_with_monitor(stdscr, sbatch, sbatch_extra, scripts, combined, hint_attr, err_attr)
                     if ok_s:
                         okc += 1
-                        last = f"{combined}: {det_s}"
+                        last = f"{combined}: chain COMPLETED"
                     else:
                         failc += 1
                         last = f"{combined}: {det_s}"
-                draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, trial_num, cfgs, f"Chains submitted={okc} failed={failc}. {last}", 0 if failc==0 else err_attr, err_attr)
+                draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, trial_num, cfgs, f"Chains completed={okc} failed={failc}. {last}", 0 if failc==0 else err_attr, err_attr)
                 stdscr.getch()
         elif choice == options_len - 1:
             return
