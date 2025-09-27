@@ -54,8 +54,17 @@ def _replace_in_file(path, find_pat, repl):
     with open(path, "w", encoding="utf-8") as f:
         f.write(s2)
 
+def _remove_in_file(path, find_pat):
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    with open(path, "w", encoding="utf-8") as f:
+        for ln in lines:
+            if not re.search(find_pat, ln):
+                f.write(ln)
+
 def _submit(stdscr, cmd):
-    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    script_dir = os.path.dirname(cmd[-1]) if cmd else None
+    p = subprocess.run(cmd, cwd=script_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     out = (p.stdout or "").strip()
     err = (p.stderr or "").strip()
     jid = None
@@ -141,7 +150,7 @@ def run_run_gamd(stdscr, hint_attr):
     aux_dir = home_dir / "aux"
     combined_prefix = choice
     dest_dir = home_dir / namd_proc_dir.strip("/") / combined_prefix
-
+    
     if not dest_dir.exists():
         dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -217,6 +226,9 @@ def run_run_gamd(stdscr, hint_attr):
             _replace_in_file(str(next_conf), r'\bequil\b', 'npt1')
         else:
             _replace_in_file(str(next_conf), rf'\bnpt{prev_npt}\b', f"npt{cur_npt}")
+
+        if i >= 2:
+            _remove_in_file(str(next_conf), r'\breinitvels\s+\$temperature\b')
 
         _ensure_slurm_header(str(next_sh), slurm_account, slurm_partition)
         jid, _, _, rc = _submit(stdscr, [slurm_cmd, f"--dependency=afterok:{jid}", str(next_sh)])
