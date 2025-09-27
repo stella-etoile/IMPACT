@@ -7,8 +7,8 @@
 # Example:
 #GEN_SCRIPTS_DIR="/scratch/midway3/lwu12/TCR_Project/TCR-complex/gen_scripts"
 #PARAM_DIR="/scratch/midway3/lwu12/TCR_Project/TCR-complex/param"
-GEN_SCRIPTS_DIR="$(pwd)/../../gen_scripts/gamd"
-PARAM_DIR="$(pwd)/../../param"
+GEN_SCRIPTS_DIR="$(pwd)/../../../IMPACT/gen_scripts/gamd"
+PARAM_DIR="$(pwd)/../../../IMPACT/param"
 
 # Parameters
 PREFIX=$1

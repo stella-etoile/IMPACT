@@ -1,0 +1,28 @@
+Charm++> Running on MPI version: 3.1
+Charm++> level of thread support used: MPI_THREAD_SINGLE (desired: MPI_THREAD_SINGLE)
+Charm++> Running in non-SMP mode: 384 processes (PEs)
+Charm++> Using recursive bisection (scheme 3) for topology aware partitions
+Converse/Charm++ Commit ID: v6.10.2-0-g7bf00fa-namd-charm-6.10.2-build-2020-Aug-05-556
+Charm++> MPI timer is synchronized
+Warning> Randomization of virtual memory (ASLR) is turned on in the kernel, thread migration may not work! Run 'echo 0 > /proc/sys/kernel/randomize_va_space' as root to disable it, or try running with '+isomalloc_sync'.
+CharmLB> Load balancer assumes all CPUs are same.
+Charm++> Running on 8 hosts (2 sockets x 24 cores x 1 PUs = 48-way SMP)
+Charm++> cpu topology info is gathered in 0.031 seconds.
+Info: NAMD 2.14 for Linux-x86_64-MPI
+Info: 
+Info: Please visit http://www.ks.uiuc.edu/Research/namd/
+Info: for updates, documentation, and support information.
+Info: 
+Info: Please cite Phillips et al., J. Chem. Phys. 153:044130 (2020) doi:10.1063/5.0014475
+Info: in all publications reporting results obtained with NAMD.
+Info: 
+Info: Based on Charm++/Converse 61002 for mpi-linux-x86_64-ifort-mpicxx
+Info: Built Tue Jan 5 18:51:07 CST 2021 by yuxing on midway3-login1.rcc.local
+Info: 1 NAMD  2.14  Linux-x86_64-MPI  384    midway3-0009.rcc.local  kangheelee
+Info: Running on 384 processors, 384 nodes, 8 physical nodes.
+Info: CPU topology information available.
+Info: Charm++/Converse parallel runtime startup completed at 7.70471e+07 s
+Info: 6030.05 MB of memory in use based on /proc/self/stat
+Info: Configuration file is TCR_15_2-gamd-equil.conf
+FATAL ERROR: Unable to access config file TCR_15_2-gamd-equil.conf
+[Partition 0][Node 0] End of program
