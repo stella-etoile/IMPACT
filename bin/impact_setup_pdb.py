@@ -108,7 +108,7 @@ def init_colors():
         curses.init_pair(1, curses.COLOR_RED, -1)
         err_attr = curses.color_pair(1) | curses.A_BOLD
         if getattr(curses, "COLORS", 8) >= 256:
-            curses.init_pair(10, 242, -1)
+            curses.init_pair(10, 244, -1)
             hint_attr = curses.color_pair(10)
     return err_attr, hint_attr
 

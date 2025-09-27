@@ -2,8 +2,9 @@ conf_backups/*.bak.*
 *.bak.*
 *.pyc
 .DS_Store
-# *.out
-# *.err
+*.out
+*.err
+*.log
 
 log/
 1_output/

@@ -6,10 +6,10 @@ import tempfile
 import subprocess
 from typing import Optional, List, Tuple
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))       # .../IMPACT/bin
-ROOT_DIR = os.path.dirname(BASE_DIR)                        # .../IMPACT
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(BASE_DIR)
 DEFAULT_CONF = os.path.join(ROOT_DIR, "IMPACT.conf")
-RUN_TESTS_SH = os.path.join(BASE_DIR, "impact_setup_namd.sh")  # calls your runner in bin/
+RUN_TESTS_SH = os.path.join(BASE_DIR, "impact_setup_namd.sh")
 
 SUBTITLE = "Setup NAMD"
 EXAMPLES_ADD = "Add: e.g., 06 07,08 09"
@@ -29,7 +29,7 @@ def read_config():
     """
     conf = find_conf()
     pdb_proc_dir = "."
-    namd_proc_dir = os.path.join(ROOT_DIR, "1_output")  # sensible default
+    namd_proc_dir = os.path.join(ROOT_DIR, "1_output")
     if conf and os.path.exists(conf):
         base = os.path.dirname(conf)
         with open(conf) as fh:
@@ -96,7 +96,7 @@ def init_colors():
         curses.init_pair(1, curses.COLOR_RED, -1)
         err_attr = curses.color_pair(1) | curses.A_BOLD
         if getattr(curses, "COLORS", 8) >= 256:
-            curses.init_pair(10, 242, -1)
+            curses.init_pair(10, 244, -1)
             hint_attr = curses.color_pair(10)
         curses.init_pair(11, curses.COLOR_YELLOW, -1)
     return err_attr, hint_attr
@@ -178,7 +178,6 @@ def draw_trial_widget(stdscr, y, trial_num, focused, hint_attr):
     label = f"Trial: [{trial_num}]"
     x = max(0, (w - len(label)) // 2)
 
-    # arrows if focused (use ASCII fallback if Unicode fails)
     if focused and y - 1 >= 0:
         try:
             stdscr.addstr(y - 1, x + len(label)//2, "▲", hint_attr)
@@ -356,7 +355,7 @@ def compute_input_y(stdscr, names, ready, selection):
 def draw(
     stdscr, title, hint_attr, pdb_proc_dir, namd_proc_dir,
     names, ready, selection, cursor_idx, focus, menu_cursor,
-    trial_num,  # show current trial in menu and header widget
+    trial_num,
     msg="", msg_attr=0, err_attr=0
 ) -> Tuple[int, int]:
     stdscr.clear()
@@ -364,7 +363,6 @@ def draw(
     tx = max(0, (w - len(title)) // 2)
     try:
         stdscr.addstr(1, tx, title, curses.A_BOLD)
-        # trial widget just under the title
         draw_trial_widget(stdscr, 2, trial_num, focused=(focus == "trial"), hint_attr=hint_attr)
 
         stdscr.addstr(4, 2, "Focus: Tab switches • Esc/0 Back • Enter activates", hint_attr)
@@ -463,10 +461,10 @@ def run_setup_namd(stdscr, inherited_hint_attr=None):
     hint_attr = inherited_hint_attr if inherited_hint_attr is not None else hint_attr_local
 
     selection = set()
-    focus = "menu"     # "proc" (systems), "trial" (widget), or "menu"
+    focus = "menu"
     menu_cursor = 0
     proc_cursor = 0
-    trial_num = 1      # default/cached trial
+    trial_num = 1
 
     while True:
         names = list_processed_systems(pdb_proc_dir)
@@ -485,20 +483,17 @@ def run_setup_namd(stdscr, inherited_hint_attr=None):
         choice = None
 
         if k in (9, curses.KEY_BTAB):
-            # cycle focus: proc -> trial -> menu -> proc ...
             focus = "proc" if focus == "menu" else ("trial" if focus == "proc" else "menu")
 
         elif k in (curses.KEY_UP, ord('k')):
             if focus == "menu":
                 if menu_cursor == 0:
-                    # up from menu item 1 -> go to selection
                     focus = "proc"
                 else:
                     menu_cursor = (menu_cursor - 1) % options_len
             elif focus == "trial":
                 trial_num = max(1, trial_num - 1)
             elif focus == "proc":
-                # normal up from selection could stay put (do nothing)
                 pass
 
         elif k in (curses.KEY_DOWN, ord('j')):
@@ -507,15 +502,13 @@ def run_setup_namd(stdscr, inherited_hint_attr=None):
             elif focus == "trial":
                 trial_num = max(1, trial_num + 1)
             elif focus == "proc":
-                # down from selection -> go back to menu, stay on same cursor (default 0 if nothing set)
                 focus = "menu"
 
         elif k in (curses.KEY_LEFT, ord('h')):
             if focus == "menu":
-                if menu_cursor == 5:  # "6) Set trial number ..."
+                if menu_cursor == 5:
                     trial_num = max(1, trial_num - 1)
                 else:
-                    # original behavior
                     focus = "trial"
             elif focus == "trial":
                 trial_num = max(1, trial_num - 1)
@@ -524,16 +517,14 @@ def run_setup_namd(stdscr, inherited_hint_attr=None):
 
         elif k in (curses.KEY_RIGHT, ord('l')):
             if focus == "proc":
-                # move across systems
                 if names:
                     proc_cursor = min(len(names) - 1, proc_cursor + 1)
             elif focus == "trial":
                 trial_num = max(1, trial_num + 1)
             elif focus == "menu":
-                if menu_cursor == 5:  # "6) Set trial number ..."
+                if menu_cursor == 5:
                     trial_num = max(1, trial_num + 1)
                 else:
-                    # original behavior: no special action
                     pass
 
         elif k in (10, 13, curses.KEY_ENTER):
@@ -547,12 +538,11 @@ def run_setup_namd(stdscr, inherited_hint_attr=None):
                     else:
                         selection.add(n)
             elif focus == "trial":
-                # no-op on enter; user uses arrows
                 pass
 
         elif k in (ord('0'),):
             focus = "menu"
-            choice = options_len - 1  # "0) Back" is last
+            choice = options_len - 1
 
         elif k in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5'), ord('6'), ord('7')):
             if focus != "trial":
