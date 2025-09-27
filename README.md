@@ -117,8 +117,8 @@ Minimum terminal size: **87×26**. If smaller, a **bypass** is offered (press **
 
 Main menu:
 - `1) Setup NAMD`
-- `2) Run NAMD` *(placeholder)*
-- `3) Run GaMD` *(placeholder)*
+- `2) Run NAMD`
+- `3) Run GaMD`
 - `4) Change config`
 - `0) Exit`
 
