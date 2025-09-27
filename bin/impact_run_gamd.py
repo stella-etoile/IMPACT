@@ -14,13 +14,24 @@ def _read_conf(conf_path):
                     d[k] = v
     return d
 
-def _ensure_slurm_header(script_path, account, partition):
+def _ensure_slurm_header(
+    script_path,
+    account,
+    partition,
+    exclude=None,
+    ntasks_per_node=None,
+    num_gpu=None,
+    qos=None,
+    wall_time=None
+):
     with open(script_path, "r", encoding="utf-8") as f:
         text = f.read()
     lines = text.splitlines()
     if not lines:
         return
+
     shebang_idx = 0 if lines[0].startswith("#!") else None
+
     def repl_flag(lines, klist, new_line):
         found = False
         for i, ln in enumerate(lines):
@@ -35,10 +46,25 @@ def _ensure_slurm_header(script_path, account, partition):
         if not found:
             insert_at = 1 if shebang_idx == 0 else 0
             lines.insert(insert_at, new_line)
+
     if account:
         repl_flag(lines, ["account","A"], f"#SBATCH --account={account}")
     if partition:
         repl_flag(lines, ["partition","p"], f"#SBATCH --partition={partition}")
+    if wall_time:
+        repl_flag(lines, ["time"], f"#SBATCH --time={wall_time}")
+    if exclude:
+        repl_flag(lines, ["exclude"], f"#SBATCH --exclude={exclude}")
+    if ntasks_per_node:
+        repl_flag(lines, ["ntasks-per-node"], f"#SBATCH --ntasks-per-node={ntasks_per_node}")
+    if num_gpu:
+        g = str(num_gpu)
+        m = re.match(r'^\s*(?:gpu:)?(\d+)\s*$', g)
+        gcount = m.group(1) if m else g
+        repl_flag(lines, ["gres"], f"#SBATCH --gres=gpu:{gcount}")
+    if qos:
+        repl_flag(lines, ["qos"], f"#SBATCH --qos={qos}")
+
     text2 = "\n".join(lines) + ("\n" if not text.endswith("\n") else "")
     with open(script_path, "w", encoding="utf-8") as f:
         f.write(text2)
@@ -128,10 +154,18 @@ def _select_item(stdscr, title, items):
 def run_run_gamd(stdscr, hint_attr):
     base = Path(__file__).resolve().parent.parent
     conf = _read_conf(str(base / "IMPACT.conf"))
-    namd_proc_dir = conf.get("NAMD_PROC_DIR", "2_output/").strip()
-    slurm_account = conf.get("SLURM_ACCOUNT", "").strip()
+
+    namd_proc_dir   = conf.get("NAMD_PROC_DIR", "2_output/").strip()
+    slurm_account   = conf.get("SLURM_ACCOUNT", "").strip()
     slurm_partition = conf.get("SLURM_PARTITION", "").strip()
-    slurm_cmd = conf.get("SLURM_CMD", "sbatch").strip() or "sbatch"
+    slurm_cmd       = conf.get("SLURM_CMD", "sbatch").strip() or "sbatch"
+
+    exclude          = conf.get("EXCLUDE", "").strip()
+    ntasks_per_node  = conf.get("NTASKS_PER_NODE", "").strip()
+    num_gpu          = conf.get("NUM_GPU", "").strip()
+    qos              = conf.get("QOS", "").strip()
+    wall_equil       = conf.get("WALL_TIME_GAMD_EQUIL", "").strip()
+    wall_prod        = conf.get("WALL_TIME_GAMD_PROD", "").strip()
 
     candidates = _scan_candidates(namd_proc_dir)
     choice = _select_item(stdscr, "Select GaMD target (detected by NPT2/*.dcd)", candidates)
@@ -183,12 +217,31 @@ def run_run_gamd(stdscr, hint_attr):
         raise FileNotFoundError(str(gamd_dir))
 
     equil_sh = gamd_dir / f"{combined_prefix}-gamd-equil.sh"
-    prod_sh = gamd_dir / f"{combined_prefix}-gamd-prod.sh"
+    prod_sh  = gamd_dir / f"{combined_prefix}-gamd-prod.sh"
     if not equil_sh.exists() or not prod_sh.exists():
         raise FileNotFoundError("Missing equil/prod scripts in gamd/")
 
-    _ensure_slurm_header(str(equil_sh), slurm_account, slurm_partition)
-    _ensure_slurm_header(str(prod_sh), slurm_account, slurm_partition)
+    _ensure_slurm_header(
+        str(equil_sh),
+        slurm_account,
+        slurm_partition,
+        exclude=exclude,
+        ntasks_per_node=ntasks_per_node,
+        num_gpu=num_gpu,
+        qos=qos,
+        wall_time=wall_equil or None
+    )
+
+    _ensure_slurm_header(
+        str(prod_sh),
+        slurm_account,
+        slurm_partition,
+        exclude=exclude,
+        ntasks_per_node=ntasks_per_node,
+        num_gpu=num_gpu,
+        qos=qos,
+        wall_time=wall_prod or None
+    )
 
     jid, _, _, rc = _submit(stdscr, [slurm_cmd, str(equil_sh)])
     if rc != 0 or not jid:
@@ -197,7 +250,16 @@ def run_run_gamd(stdscr, hint_attr):
     npt1_sh = gamd_dir / f"{combined_prefix}-gamd-npt1.sh"
     shutil.copy2(prod_sh, npt1_sh)
     _replace_in_file(str(npt1_sh), r'\bgamd-prod\b', 'gamd-npt1')
-    _ensure_slurm_header(str(npt1_sh), slurm_account, slurm_partition)
+    _ensure_slurm_header(
+        str(npt1_sh),
+        slurm_account,
+        slurm_partition,
+        exclude=exclude,
+        ntasks_per_node=ntasks_per_node,
+        num_gpu=num_gpu,
+        qos=qos,
+        wall_time=wall_prod or None
+    )
 
     jid, _, _, rc = _submit(stdscr, [slurm_cmd, f"--dependency=afterok:{jid}", str(prod_sh)])
     if rc != 0 or not jid:
@@ -230,7 +292,16 @@ def run_run_gamd(stdscr, hint_attr):
         if i >= 2:
             _remove_in_file(str(next_conf), r'\breinitvels\s+\$temperature\b')
 
-        _ensure_slurm_header(str(next_sh), slurm_account, slurm_partition)
+        _ensure_slurm_header(
+            str(next_sh),
+            slurm_account,
+            slurm_partition,
+            exclude=exclude,
+            ntasks_per_node=ntasks_per_node,
+            num_gpu=num_gpu,
+            qos=qos,
+            wall_time=wall_prod or None
+        )
         jid, _, _, rc = _submit(stdscr, [slurm_cmd, f"--dependency=afterok:{jid}", str(next_sh)])
         if rc != 0 or not jid:
             break
