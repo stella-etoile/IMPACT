@@ -1,4 +1,4 @@
-import os, re, glob, stat, shutil, subprocess, time, curses, shlex
+import os, re, glob, stat, shutil, subprocess, time, curses
 from curses import textpad, ascii
 from pathlib import Path
 from typing import Optional, List, Tuple
@@ -198,7 +198,7 @@ def _remove_in_file(path, find_pat):
             if not re.search(find_pat, ln):
                 f.write(ln)
 
-def _ensure_slurm_header(script_path, account, partition, exclude=None, ntasks_per_node=None, num_gpu=None, qos=None, wall_time=None, workdir=None):
+def _ensure_slurm_header(script_path, account, partition, exclude=None, ntasks_per_node=None, num_gpu=None, qos=None, wall_time=None):
     with open(script_path, "r", encoding="utf-8") as f:
         text = f.read()
     lines = text.splitlines()
@@ -237,38 +237,43 @@ def _ensure_slurm_header(script_path, account, partition, exclude=None, ntasks_p
         repl_flag(lines, ["gres"], f"#SBATCH --gres=gpu:{gcount}")
     if qos:
         repl_flag(lines, ["qos"], f"#SBATCH --qos={qos}")
-    if workdir:
-        repl_flag(lines, ["chdir","D"], f"#SBATCH --chdir={workdir}")
     text2 = "\n".join(lines) + ("\n" if not text.endswith("\n") else "")
     with open(script_path, "w", encoding="utf-8") as f:
         f.write(text2)
+
+def _ensure_cd(script_path, gamd_dir):
+    with open(script_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    for ln in lines:
+        if re.search(r'^\s*cd\s+', ln) and gamd_dir in ln:
+            return
+    insert_at = 0
+    if lines and lines[0].startswith("#!"):
+        insert_at = 1
+    last_sbatch = -1
+    for i, ln in enumerate(lines):
+        if ln.strip().startswith("#SBATCH"):
+            last_sbatch = i
+    insert_at = max(insert_at, last_sbatch + 1)
+    lines.insert(insert_at, f"cd {gamd_dir}\n")
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
 
 def parse_jobid(s):
     m = re.search(r"\b(\d{3,})\b", (s or "").strip())
     return m.group(1) if m else "?"
 
-def sbatch_submit(sbatch, script_path, extra=None, dependency=None):
-    script_dir = os.path.dirname(script_path)
-    cmd = [sbatch, "--parsable", f"--chdir={script_dir}"]
+def sbatch_submit(sbatch, script_path, extra=None, dependency=None, cwd=None):
+    cmd = [sbatch]
     if dependency:
         cmd.append(f"--dependency=afterok:{dependency}")
     if extra:
-        if isinstance(extra, list):
-            cmd += extra
-        else:
-            cmd += shlex.split(str(extra))
+        cmd += extra
     cmd.append(script_path)
-    try:
-        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
-    except subprocess.TimeoutExpired:
-        return False, "?", "sbatch timed out"
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd)
     ok = (r.returncode == 0)
-    out = (r.stdout or "").strip()
-    err = (r.stderr or "").strip()
-    jid = out.split(";")[0].strip() if ok and out else "?"
-    if not ok or not jid.isdigit():
-        return False, "?", (err or out or "sbatch failed with unknown error")
-    return True, jid, out
+    out = r.stdout.strip() if r.stdout else r.stderr.strip()
+    return ok, parse_jobid(out), out
 
 def build_gamd_chain(run_dir, combined, base_dir, conf):
     aux_dir = os.path.join(base_dir, "aux")
@@ -323,43 +328,30 @@ def build_gamd_chain(run_dir, combined, base_dir, conf):
     qos       = conf.get("QOS", "").strip()
     wall_eq   = conf.get("WALL_TIME_GAMD_EQUIL", "").strip()
     wall_pr   = conf.get("WALL_TIME_GAMD_PROD", "").strip()
-    workdir = os.path.dirname(equil_sh)
-    _ensure_slurm_header(equil_sh, account, part, exclude=exclude, ntasks_per_node=ntasks, num_gpu=num_gpu, qos=qos, wall_time=wall_eq or None, workdir=workdir)
-    _ensure_slurm_header(prod_sh,  account, part, exclude=exclude, ntasks_per_node=ntasks, num_gpu=num_gpu, qos=qos, wall_time=wall_pr or None, workdir=workdir)
-    _ensure_slurm_header(npt1_sh,  account, part, exclude=exclude, ntasks_per_node=ntasks, num_gpu=num_gpu, qos=qos, wall_time=wall_pr or None, workdir=workdir)
+    _ensure_slurm_header(equil_sh, account, part, exclude=exclude, ntasks_per_node=ntasks, num_gpu=num_gpu, qos=qos, wall_time=wall_eq or None)
+    _ensure_slurm_header(prod_sh,  account, part, exclude=exclude, ntasks_per_node=ntasks, num_gpu=num_gpu, qos=qos, wall_time=wall_pr or None)
+    _ensure_slurm_header(npt1_sh,  account, part, exclude=exclude, ntasks_per_node=ntasks, num_gpu=num_gpu, qos=qos, wall_time=wall_pr or None)
     for i in range(2, 9):
         sh = os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh")
         if os.path.isfile(sh):
-            _ensure_slurm_header(sh, account, part, exclude=exclude, ntasks_per_node=ntasks, num_gpu=num_gpu, qos=qos, wall_time=wall_pr or None, workdir=os.path.dirname(sh))
-    scripts = {
-        "equil": equil_sh,
-        "prod": prod_sh,
-        "npt": [os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh") for i in range(1, 9) if os.path.isfile(os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh"))],
-        "dir": gamd_dir
-    }
+            _ensure_slurm_header(sh, account, part, exclude=exclude, ntasks_per_node=ntasks, num_gpu=num_gpu, qos=qos, wall_time=wall_pr or None)
+    for sh in [equil_sh, prod_sh, npt1_sh] + [os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh") for i in range(2, 9) if os.path.isfile(os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh"))]:
+        if os.path.isfile(sh):
+            _ensure_cd(sh, gamd_dir)
+    scripts = {"equil": equil_sh, "prod": prod_sh, "npt": [os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh") for i in range(1, 9) if os.path.isfile(os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh"))], "dir": gamd_dir}
     return True, "ok", scripts
 
 def submit_gamd_chain(sbatch, sbatch_extra, scripts):
-    log_path = os.path.join(scripts["dir"], "submission.log")
-    def log(line):
-        try:
-            with open(log_path, "a", encoding="utf-8") as f:
-                f.write(line.rstrip() + "\n")
-        except Exception:
-            pass
-    ok1, jid1, out1 = sbatch_submit(sbatch, scripts["equil"], extra=sbatch_extra)
-    log(f"[equil] ok={ok1} jid={jid1} msg={out1}")
+    ok1, jid1, out1 = sbatch_submit(sbatch, scripts["equil"], extra=sbatch_extra, cwd=os.path.dirname(scripts["equil"]))
     if not ok1:
         return False, f"equil submit failed: {out1}"
-    ok2, jid2, out2 = sbatch_submit(sbatch, scripts["prod"], extra=sbatch_extra, dependency=jid1)
-    log(f"[prod] ok={ok2} jid={jid2} dep={jid1} msg={out2}")
+    ok2, jid2, out2 = sbatch_submit(sbatch, scripts["prod"], extra=sbatch_extra, dependency=jid1, cwd=os.path.dirname(scripts["prod"]))
     if not ok2:
         return False, f"prod submit failed: {out2}"
     dep = jid2
     jids = [("equil", jid1), ("prod", jid2)]
     for i, sh in enumerate(scripts["npt"], start=1):
-        ok, jid, out = sbatch_submit(sbatch, sh, extra=sbatch_extra, dependency=dep)
-        log(f"[npt{i}] ok={ok} jid={jid} dep={dep} msg={out}")
+        ok, jid, out = sbatch_submit(sbatch, sh, extra=sbatch_extra, dependency=dep, cwd=os.path.dirname(sh))
         if not ok:
             return False, f"npt{i} submit failed: {out}"
         jids.append((f"npt{i}", jid))
@@ -617,8 +609,7 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
                     else:
                         failc += 1
                         last = f"{combined}: {det_s}"
-                msg_text = f"Chains submitted={okc} failed={failc}. {last}  See each run's gamd/submission.log"
-                draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, trial_num, cfgs, msg_text, 0 if failc==0 else err_attr, err_attr)
+                draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, trial_num, cfgs, f"Chains submitted={okc} failed={failc}. {last}", 0 if failc==0 else err_attr, err_attr)
                 stdscr.getch()
         elif choice == options_len - 1:
             return
