@@ -158,6 +158,28 @@ def submit_chain_protocol(run_dir, combined, sbatch, sbatch_extra, aux_dir):
         return False, f"NPT2 submit failed: {out4}"
     return True, f"mini={jid1}, equil={jid2}, npt1={jid3}, npt2={jid4}"
 
+def sbatch_defaults_from_conf(conf):
+    opts = []
+    a = conf.get("SLURM_ACCOUNT", "").strip()
+    if a:
+        opts.append(f"--account={a}")
+    p = conf.get("SLURM_PARTITION", "").strip()
+    if p:
+        opts.append(f"--partition={p}")
+    q = conf.get("QOS", "").strip()
+    if q:
+        opts.append(f"--qos={q}")
+    ex = conf.get("EXCLUDE", "").strip()
+    if ex:
+        opts.append(f"--exclude={ex}")
+    nt = conf.get("NTASKS_PER_NODE", "").strip()
+    if nt:
+        opts.append(f"--ntasks-per-node={nt}")
+    ng = conf.get("NUM_GPU", "").strip()
+    if ng:
+        opts.append(f"--gres=gpu:{ng}")
+    return opts
+
 def draw(stdscr, items, sel, idx, msg):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
@@ -193,7 +215,7 @@ def run_run_namd(stdscr, hint_attr):
     msg = ""
     sbatch = conf.get("SLURM_CMD", "sbatch").strip() or "sbatch"
     extra = conf.get("SBATCH_EXTRA", "").strip()
-    sbatch_extra = extra.split() if extra else []
+    sbatch_extra = sbatch_defaults_from_conf(conf) + (extra.split() if extra else [])
     curses.curs_set(0)
     stdscr.keypad(True)
     while True:
