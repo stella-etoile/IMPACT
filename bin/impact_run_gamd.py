@@ -121,28 +121,6 @@ def tail_lines(path, n=50, w=120):
     except Exception:
         return []
 
-def draw_trial_widget(stdscr, y, trial_num, focused, hint_attr):
-    h, w = stdscr.getmaxyx()
-    label = f"Trial: [{trial_num}]"
-    x = max(0, (w - len(label)) // 2)
-    if focused and y - 1 >= 0:
-        try:
-            stdscr.addstr(y - 1, x + len(label)//2, "▲", hint_attr)
-        except Exception:
-            try: stdscr.addstr(y - 1, x + len(label)//2, "^", hint_attr)
-            except curses.error: pass
-    attr = curses.A_REVERSE | curses.A_BOLD if focused else curses.A_BOLD
-    try:
-        stdscr.addstr(y, x, label, attr)
-    except curses.error:
-        pass
-    if focused and y + 1 < h:
-        try:
-            stdscr.addstr(y + 1, x + len(label)//2, "▼", hint_attr)
-        except Exception:
-            try: stdscr.addstr(y + 1, x + len(label)//2, "v", hint_attr)
-            except curses.error: pass
-
 def list_gamd_candidates(namd_proc_dir):
     items = []
     root = Path(namd_proc_dir)
@@ -241,6 +219,24 @@ def _ensure_slurm_header(script_path, account, partition, exclude=None, ntasks_p
     with open(script_path, "w", encoding="utf-8") as f:
         f.write(text2)
 
+def _ensure_job_name(script_path, job_name):
+    with open(script_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    shebang_idx = 0 if lines and lines[0].startswith("#!") else -1
+    last_sbatch = -1
+    found = False
+    for i, ln in enumerate(lines):
+        if ln.strip().startswith("#SBATCH"):
+            last_sbatch = i
+            if re.search(r'(--job-name|-J)\b', ln):
+                lines[i] = f"#SBATCH --job-name={job_name}\n"
+                found = True
+    if not found:
+        insert_at = max(1 if shebang_idx == 0 else 0, last_sbatch + 1)
+        lines.insert(insert_at, f"#SBATCH --job-name={job_name}\n")
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
 def _ensure_cd(script_path, gamd_dir):
     with open(script_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
@@ -286,7 +282,7 @@ def build_gamd_chain(run_dir, combined, base_dir, conf):
     shutil.copy2(src_runner, dst_runner)
     _chmod_x(dst_runner)
     prefix, trial = parse_combined(combined)
-    p = subprocess.run([dst_runner, script_dir, prefix, str(trial)], cwd=dest_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    subprocess.run([dst_runner, script_dir, prefix, str(trial)], cwd=dest_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         os.remove(dst_runner)
     except Exception:
@@ -301,23 +297,22 @@ def build_gamd_chain(run_dir, combined, base_dir, conf):
     npt1_sh = os.path.join(gamd_dir, f"{combined}-gamd-npt1.sh")
     shutil.copy2(prod_sh, npt1_sh)
     _replace_in_file(npt1_sh, r'\bgamd-prod\b', 'gamd-npt1')
+    _replace_in_file(npt1_sh, r'\bnpt\d+\b', 'npt1')
     for i in range(1, 8):
-        cur_conf = os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.conf")
-        next_conf = os.path.join(gamd_dir, f"{combined}-gamd-npt{i+1}.conf")
-        next_sh = os.path.join(gamd_dir, f"{combined}-gamd-npt{i+1}.sh")
+        next_i = i + 1
+        cur_conf  = os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.conf")
+        next_conf = os.path.join(gamd_dir, f"{combined}-gamd-npt{next_i}.conf")
+        next_sh   = os.path.join(gamd_dir, f"{combined}-gamd-npt{next_i}.sh")
         if not os.path.isfile(cur_conf):
             break
         shutil.copy2(cur_conf, next_conf)
-        if os.path.isfile(os.path.join(gamd_dir, f"{combined}-gamd-{i}.sh")):
-            shutil.copy2(os.path.join(gamd_dir, f"{combined}-gamd-{i}.sh"), next_sh)
+        src_sh = os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh")
+        if os.path.isfile(src_sh):
+            shutil.copy2(src_sh, next_sh)
         else:
             shutil.copy2(npt1_sh, next_sh)
-        _replace_in_file(next_conf, rf'\bnpt{i}\b', f"npt{i+1}")
-        _replace_in_file(next_sh, rf'\bnpt{i}\b', f"npt{i+1}")
-        if i == 1:
-            _replace_in_file(next_conf, r'\bequil\b', 'npt1')
-        else:
-            _replace_in_file(next_conf, rf'\bnpt{i-1}\b', f"npt{i}")
+        _replace_in_file(next_conf, r'\bnpt\d+\b', f"npt{next_i}")
+        _replace_in_file(next_sh,  r'\bnpt\d+\b', f"npt{next_i}")
         if i >= 2:
             _remove_in_file(next_conf, r'\breinitvels\s+\$temperature\b')
     account   = conf.get("SLURM_ACCOUNT", "").strip()
@@ -335,18 +330,33 @@ def build_gamd_chain(run_dir, combined, base_dir, conf):
         sh = os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh")
         if os.path.isfile(sh):
             _ensure_slurm_header(sh, account, part, exclude=exclude, ntasks_per_node=ntasks, num_gpu=num_gpu, qos=qos, wall_time=wall_pr or None)
+    _ensure_job_name(equil_sh, f"{combined}-gamd-equil")
+    _ensure_job_name(prod_sh,  f"{combined}-gamd-prod")
+    _ensure_job_name(npt1_sh,  f"{combined}-gamd-npt1")
+    for i in range(2, 9):
+        sh = os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh")
+        if os.path.isfile(sh):
+            _ensure_job_name(sh, f"{combined}-gamd-npt{i}")
     for sh in [equil_sh, prod_sh, npt1_sh] + [os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh") for i in range(2, 9) if os.path.isfile(os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh"))]:
         if os.path.isfile(sh):
             _ensure_cd(sh, gamd_dir)
-    scripts = {"equil": equil_sh, "prod": prod_sh, "npt": [os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh") for i in range(1, 9) if os.path.isfile(os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh"))], "dir": gamd_dir}
+    scripts = {
+        "equil": equil_sh,
+        "prod": prod_sh,
+        "npt": [os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh") for i in range(1, 9) if os.path.isfile(os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh"))],
+        "dir": gamd_dir
+    }
     return True, "ok", scripts
 
 def submit_gamd_chain(sbatch, sbatch_extra, scripts):
     ok1, jid1, out1 = sbatch_submit(sbatch, scripts["equil"], extra=sbatch_extra, cwd=os.path.dirname(scripts["equil"]))
     if not ok1:
         return False, f"equil submit failed: {out1}"
-    dep = jid1
-    jids = [("equil", jid1)]
+    ok2, jid2, out2 = sbatch_submit(sbatch, scripts["prod"], extra=sbatch_extra, dependency=jid1, cwd=os.path.dirname(scripts["prod"]))
+    if not ok2:
+        return False, f"prod submit failed: {out2}"
+    dep = jid2
+    jids = [("equil", jid1), ("prod", jid2)]
     for i, sh in enumerate(scripts["npt"], start=1):
         ok, jid, out = sbatch_submit(sbatch, sh, extra=sbatch_extra, dependency=dep, cwd=os.path.dirname(sh))
         if not ok:
@@ -362,22 +372,21 @@ def compute_input_y(stdscr, names, ready, selection):
     ready_lines = max(1, len(wrap_line(ready_line, max(10, w - 4))))
     sel_line = " ".join(sorted(selection)) if selection else "(empty)"
     sel_lines = max(1, len(wrap_line(sel_line, max(10, w - 4))))
-    cur_y = 11 + names_lines
+    cur_y = 10 + names_lines
     cur2_y = cur_y + 1 + ready_lines + 1
     menu_y = cur2_y + 2 + sel_lines + 1
     return menu_y + 10
 
-def draw(stdscr, title, hint_attr, namd_proc_dir, names, ready, selection, cursor_idx, focus, menu_cursor, trial_num, cfgs, msg="", msg_attr=0, err_attr=0):
+def draw(stdscr, title, hint_attr, namd_proc_dir, names, ready, selection, cursor_idx, focus, menu_cursor, cfgs, msg="", msg_attr=0, err_attr=0):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
     tx = max(0, (w - len(title)) // 2)
     try:
         stdscr.addstr(1, tx, title, curses.A_BOLD)
-        draw_trial_widget(stdscr, 2, trial_num, focused=(focus == "trial"), hint_attr=hint_attr)
-        stdscr.addstr(4, 2, "Focus: Tab switches • Esc/0 Back • Enter activates", hint_attr)
-        stdscr.addstr(5, 2, "Menu: ↑/↓ or j/k move • 1–6 shortcuts • At trial: ↑/↓ to change", hint_attr)
-        stdscr.addstr(6, 2, "Systems: ←/→ move • Enter toggles add/remove • ←/→ moves between systems ⇄ trial ⇄ menu", hint_attr)
-        y = 8
+        stdscr.addstr(3, 2, "Focus: Tab switches • Esc/0 Back • Enter activates", hint_attr)
+        stdscr.addstr(4, 2, "Menu: ↑/↓ or j/k move • 1–6 shortcuts", hint_attr)
+        stdscr.addstr(5, 2, "Systems: ←/→ move • Enter toggles add/remove", hint_attr)
+        y = 7
         for k in CFG_KEYS:
             v = cfgs.get(k, "")
             s = f"{k}: {v}"
@@ -476,7 +485,6 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
     focus = "menu"
     menu_cursor = 0
     proc_cursor = 0
-    trial_num = 1
     while True:
         names = list_gamd_candidates(namd_proc_dir)
         ready = list_gamd_prepared(namd_proc_dir, names)
@@ -488,39 +496,29 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
             if k == "NAMD_PROC_DIR":
                 continue
             cfgs[k] = conf.get(k, "")
-        _, options_len = draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, trial_num, cfgs)
+        _, options_len = draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, cfgs)
         k = stdscr.getch()
         choice = None
         if k in (9, curses.KEY_BTAB):
-            focus = "proc" if focus == "menu" else ("trial" if focus == "proc" else "menu")
+            focus = "proc" if focus == "menu" else "menu"
         elif k in (curses.KEY_UP, ord('k')):
             if focus == "menu":
                 if menu_cursor == 0:
                     focus = "proc"
                 else:
                     menu_cursor = (menu_cursor - 1) % options_len
-            elif focus == "trial":
-                trial_num = max(1, trial_num - 1)
         elif k in (curses.KEY_DOWN, ord('j')):
             if focus == "menu":
                 menu_cursor = (menu_cursor + 1) % options_len
-            elif focus == "trial":
-                trial_num = max(1, trial_num + 1)
             elif focus == "proc":
                 focus = "menu"
         elif k in (curses.KEY_LEFT, ord('h')):
-            if focus == "menu":
-                focus = "trial"
-            elif focus == "trial":
-                trial_num = max(1, trial_num - 1)
-            elif focus == "proc":
+            if focus == "proc":
                 proc_cursor = max(0, proc_cursor - 1) if names else 0
         elif k in (curses.KEY_RIGHT, ord('l')):
             if focus == "proc":
                 if names:
                     proc_cursor = min(len(names) - 1, proc_cursor + 1)
-            elif focus == "trial":
-                trial_num = max(1, trial_num + 1)
         elif k in (10, 13, curses.KEY_ENTER):
             if focus == "menu":
                 choice = menu_cursor
@@ -535,7 +533,7 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
             focus = "menu"
             choice = options_len - 1
         elif k in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5'), ord('6')):
-            if focus != "trial":
+            if focus != "proc":
                 focus = "menu"
                 desired = int(chr(k)) - 1
                 if desired < options_len:
@@ -548,7 +546,7 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
         if choice == 0:
             nonprepared = [t for t in names if t not in ready]
             if not nonprepared:
-                draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, trial_num, cfgs, "All detected appear GaMD-prepared", err_attr, err_attr)
+                draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, cfgs, "All detected appear GaMD-prepared", err_attr, err_attr)
                 stdscr.getch()
             else:
                 selection.update(nonprepared)
@@ -564,7 +562,7 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
                 if valid:
                     selection.update(valid)
                 if invalid:
-                    draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, trial_num, cfgs, "Invalid: " + ", ".join(invalid), err_attr, err_attr)
+                    draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, cfgs, "Invalid: " + ", ".join(invalid), err_attr, err_attr)
                     stdscr.getch()
         elif choice == 3:
             y_in = compute_input_y(stdscr, names, ready, selection)
@@ -580,13 +578,13 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
                 if not_in_list:   msgs.append("Not found: " + ", ".join(not_in_list))
                 if not_selected:  msgs.append("Not in selection: " + ", ".join(not_selected))
                 if msgs:
-                    draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, trial_num, cfgs, " | ".join(msgs), err_attr, err_attr)
+                    draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, cfgs, " | ".join(msgs), err_attr, err_attr)
                     stdscr.getch()
         elif choice == 4:
             selection = set()
         elif choice == 5:
             if not selection:
-                draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, trial_num, cfgs, "Selection is empty", err_attr, err_attr)
+                draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, cfgs, "Selection is empty", err_attr, err_attr)
                 stdscr.getch()
             else:
                 okc = 0
@@ -606,7 +604,7 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
                     else:
                         failc += 1
                         last = f"{combined}: {det_s}"
-                draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, trial_num, cfgs, f"Chains submitted={okc} failed={failc}. {last}", 0 if failc==0 else err_attr, err_attr)
+                draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, cfgs, f"Chains submitted={okc} failed={failc}. {last}", 0 if failc==0 else err_attr, err_attr)
                 stdscr.getch()
         elif choice == options_len - 1:
             return
@@ -616,3 +614,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
