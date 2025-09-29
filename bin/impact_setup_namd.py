@@ -102,7 +102,6 @@ def init_colors():
     return err_attr, hint_attr
 
 def tail_lines(path, n=50, w=120):
-    """Return last n lines (trimmed to width w). Efficient backward read."""
     try:
         with open(path, "rb") as f:
             f.seek(0, os.SEEK_END)
@@ -124,10 +123,7 @@ def tail_lines(path, n=50, w=120):
     except Exception:
         return []
 
-# -------------------- data listing --------------------
-
 def list_processed_systems(pdb_proc_dir):
-    """List selectable names from PDB_PROC_DIR (dirs or .pdb basenames)."""
     if not os.path.isdir(pdb_proc_dir):
         return []
     names = []
@@ -140,7 +136,6 @@ def list_processed_systems(pdb_proc_dir):
     return sorted(set(names))
 
 def list_namd_prepared(namd_proc_dir, names):
-    """Mark items as already NAMD-prepared if outputs exist in NAMD_PROC_DIR."""
     ready = set()
     if not os.path.isdir(namd_proc_dir):
         return ready
