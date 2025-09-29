@@ -248,7 +248,7 @@ def _ensure_cd(script_path, gamd_dir):
         insert_at = 1
     last_sbatch = -1
     for i, ln in enumerate(lines):
-        if ln.strip().startswith("#SBATCH"):
+        if ln.strip().startsWith("#SBATCH"):
             last_sbatch = i
     insert_at = max(insert_at, last_sbatch + 1)
     lines.insert(insert_at, f"cd {gamd_dir}\n")
@@ -352,11 +352,8 @@ def submit_gamd_chain(sbatch, sbatch_extra, scripts):
     ok1, jid1, out1 = sbatch_submit(sbatch, scripts["equil"], extra=sbatch_extra, cwd=os.path.dirname(scripts["equil"]))
     if not ok1:
         return False, f"equil submit failed: {out1}"
-    ok2, jid2, out2 = sbatch_submit(sbatch, scripts["prod"], extra=sbatch_extra, dependency=jid1, cwd=os.path.dirname(scripts["prod"]))
-    if not ok2:
-        return False, f"prod submit failed: {out2}"
-    dep = jid2
-    jids = [("equil", jid1), ("prod", jid2)]
+    dep = jid1
+    jids = [("equil", jid1)]
     for i, sh in enumerate(scripts["npt"], start=1):
         ok, jid, out = sbatch_submit(sbatch, sh, extra=sbatch_extra, dependency=dep, cwd=os.path.dirname(sh))
         if not ok:
@@ -614,4 +611,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
