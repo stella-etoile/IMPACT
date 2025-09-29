@@ -3,9 +3,12 @@ import os
 import re
 import subprocess
 import curses
+import time
+from pathlib import Path
 
 CONF_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "IMPACT.conf")
 STAGES = ["mini", "equil", "NPT1", "NPT2"]
+STAMP_NAME = ".impact_submitted"
 
 def load_conf(path):
     c = {}
@@ -92,7 +95,7 @@ def sbatch_submit(sbatch, script_path, extra=None, dependency=None, cwd=None):
 def job_running(jobid):
     if jobid in ("?", "", None):
         return False
-    r = subprocess.run(["squeue", "-j", str(jobid)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    r = subprocess.run(["squeue", "-h", "-j", str(jobid), "-o", "%i"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     return (r.returncode == 0) and (str(jobid) in r.stdout)
 
 def run_vmd(aux_dir, combined, run_dir):
@@ -146,7 +149,51 @@ def _ensure_cd(script_path, workdir):
     except Exception:
         pass
 
+def existing_jobs_for(combined):
+    # Treat job names like: {combined}_mini, {combined}_equi, {combined}_npt1, {combined}_npt2
+    needle = f"{combined}_"
+    try:
+        r = subprocess.run(["squeue", "-h", "-o", "%i %j %T"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        if r.returncode != 0:
+            return []
+        out = []
+        for line in r.stdout.splitlines():
+            parts = line.strip().split(None, 2)
+            if len(parts) >= 2:
+                jid, name = parts[0], parts[1]
+                if needle in name:
+                    out.append((jid, name))
+        return out
+    except Exception:
+        return []
+
+def has_recent_stamp(run_dir, max_age_sec=600):
+    p = os.path.join(run_dir, STAMP_NAME)
+    try:
+        st = os.stat(p)
+        return (time.time() - st.st_mtime) < max_age_sec
+    except FileNotFoundError:
+        return False
+    except Exception:
+        return False
+
+def write_stamp(run_dir, text):
+    try:
+        with open(os.path.join(run_dir, STAMP_NAME), "w", encoding="utf-8") as f:
+            f.write(text + "\n")
+    except Exception:
+        pass
+
 def submit_chain_protocol(run_dir, combined, sbatch, sbatch_extra, aux_dir):
+    # Hard guard 1: skip if jobs for this target are already queued/running
+    existing = existing_jobs_for(combined)
+    if existing:
+        names = ", ".join([f"{n}({j})" for j, n in existing])
+        return False, f"already queued: {names}"
+    # Hard guard 2: skip if a very recent submission stamp exists (e.g., double Enter)
+    if has_recent_stamp(run_dir, max_age_sec=300):
+        return False, "recent submission stamp exists; skipping"
+
     mini_dir = os.path.join(run_dir, "mini")
     equil_dir = os.path.join(run_dir, "equil")
     npt1_dir = os.path.join(run_dir, "NPT1")
@@ -157,33 +204,45 @@ def submit_chain_protocol(run_dir, combined, sbatch, sbatch_extra, aux_dir):
     npt2_sh = find_stage_script(npt2_dir, combined, "NPT2") if os.path.isdir(npt2_dir) else None
     if not mini_sh:
         return False, "mini script missing"
+
     _ensure_cd(mini_sh, mini_dir)
     ok1, jid1, out1 = sbatch_submit(sbatch, mini_sh, extra=sbatch_extra, cwd=mini_dir)
     if not ok1:
         return False, f"mini submit failed: {out1}"
+
+    # Stamp immediately so a second Enter can’t fire another chain
+    write_stamp(run_dir, f"mini={jid1}")
+
+    # Wait for mini to leave the queue (queued or running both count as 'running' here)
     while job_running(jid1):
         curses.napms(10000)
+
     cleanup_restart_files(mini_dir)
     run_vmd(aux_dir, combined, run_dir)
     move_lf_pdb(run_dir, combined)
+
     if not equil_sh:
         return False, "equil script missing"
     _ensure_cd(equil_sh, equil_dir)
     ok2, jid2, out2 = sbatch_submit(sbatch, equil_sh, extra=sbatch_extra, cwd=equil_dir)
     if not ok2:
         return False, f"equil submit failed: {out2}"
+
     if not npt1_sh:
         return False, "NPT1 script missing"
     _ensure_cd(npt1_sh, npt1_dir)
     ok3, jid3, out3 = sbatch_submit(sbatch, npt1_sh, extra=sbatch_extra, dependency=jid2, cwd=npt1_dir)
     if not ok3:
         return False, f"NPT1 submit failed: {out3}"
+
     if not npt2_sh:
         return False, "NPT2 script missing"
     _ensure_cd(npt2_sh, npt2_dir)
     ok4, jid4, out4 = sbatch_submit(sbatch, npt2_sh, extra=sbatch_extra, dependency=jid3, cwd=npt2_dir)
     if not ok4:
         return False, f"NPT2 submit failed: {out4}"
+
+    write_stamp(run_dir, f"mini={jid1}, equil={jid2}, npt1={jid3}, npt2={jid4}")
     return True, f"mini={jid1}, equil={jid2}, npt1={jid3}, npt2={jid4}"
 
 def sbatch_defaults_from_conf(conf):
@@ -285,4 +344,5 @@ def run_run_namd(stdscr, hint_attr):
                 else:
                     failc += 1
                     last = f"{it['combined']}: {detail}"
+            sel = [False] * len(items)
             msg = f"Chains submitted={okc} failed={failc}. {last}"
