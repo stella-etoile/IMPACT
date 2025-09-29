@@ -1,24 +1,11 @@
 #!/bin/sh
 
 #SBATCH --job-name=TCR_##_mini
-#SBATCH --time=00:15:00
-#SBATCH --nodes=2
-#SBATCH --ntasks-per-node=28
+#SBATCH --time=00:10:00
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=8
 #SBATCH --output=TCR_##-mini.out
 #SBATCH --error=TCR_##-mini.err
-
-BYPASS=false
-
-for arg in "$@"; do
-  if [[ "$arg" == "--bypass" ]]; then
-    BYPASS=true
-  fi
-done
-
-if ! $BYPASS && [[ "$(hostname)" != midway2* ]]; then
-  echo "This script can only be run on Midway2. Exiting."
-  exit 1
-fi
 
 module load namd
 
