@@ -122,6 +122,30 @@ def move_lf_pdb(run_dir, combined):
         except Exception:
             pass
 
+def _ensure_cd(script_path, workdir):
+    try:
+        with open(script_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return
+    for ln in lines:
+        if re.search(r"^\s*cd\s+", ln) and workdir in ln:
+            return
+    insert_at = 0
+    if lines and lines[0].startswith("#!"):
+        insert_at = 1
+    last_sbatch = -1
+    for i, ln in enumerate(lines):
+        if ln.strip().startswith("#SBATCH"):
+            last_sbatch = i
+    insert_at = max(insert_at, last_sbatch + 1)
+    lines.insert(insert_at, f"cd {workdir}\n")
+    try:
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+    except Exception:
+        pass
+
 def submit_chain_protocol(run_dir, combined, sbatch, sbatch_extra, aux_dir):
     mini_dir = os.path.join(run_dir, "mini")
     equil_dir = os.path.join(run_dir, "equil")
@@ -133,6 +157,7 @@ def submit_chain_protocol(run_dir, combined, sbatch, sbatch_extra, aux_dir):
     npt2_sh = find_stage_script(npt2_dir, combined, "NPT2") if os.path.isdir(npt2_dir) else None
     if not mini_sh:
         return False, "mini script missing"
+    _ensure_cd(mini_sh, mini_dir)
     ok1, jid1, out1 = sbatch_submit(sbatch, mini_sh, extra=sbatch_extra, cwd=mini_dir)
     if not ok1:
         return False, f"mini submit failed: {out1}"
@@ -143,16 +168,19 @@ def submit_chain_protocol(run_dir, combined, sbatch, sbatch_extra, aux_dir):
     move_lf_pdb(run_dir, combined)
     if not equil_sh:
         return False, "equil script missing"
+    _ensure_cd(equil_sh, equil_dir)
     ok2, jid2, out2 = sbatch_submit(sbatch, equil_sh, extra=sbatch_extra, cwd=equil_dir)
     if not ok2:
         return False, f"equil submit failed: {out2}"
     if not npt1_sh:
         return False, "NPT1 script missing"
+    _ensure_cd(npt1_sh, npt1_dir)
     ok3, jid3, out3 = sbatch_submit(sbatch, npt1_sh, extra=sbatch_extra, dependency=jid2, cwd=npt1_dir)
     if not ok3:
         return False, f"NPT1 submit failed: {out3}"
     if not npt2_sh:
         return False, "NPT2 script missing"
+    _ensure_cd(npt2_sh, npt2_dir)
     ok4, jid4, out4 = sbatch_submit(sbatch, npt2_sh, extra=sbatch_extra, dependency=jid3, cwd=npt2_dir)
     if not ok4:
         return False, f"NPT2 submit failed: {out4}"
