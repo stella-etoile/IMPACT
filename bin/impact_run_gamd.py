@@ -248,7 +248,7 @@ def _ensure_cd(script_path, gamd_dir):
         insert_at = 1
     last_sbatch = -1
     for i, ln in enumerate(lines):
-        if ln.strip().startsWith("#SBATCH"):
+        if ln.strip().startswith("#SBATCH"):
             last_sbatch = i
     insert_at = max(insert_at, last_sbatch + 1)
     lines.insert(insert_at, f"cd {gamd_dir}\n")
