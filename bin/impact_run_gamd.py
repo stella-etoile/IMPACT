@@ -278,9 +278,9 @@ def _log_done_for(script_path):
             f.seek(0, os.SEEK_END)
             size = f.tell()
             take = min(size, 1_000_000)
-            f.seek(size - take)
+            f.seek(max(0, size - take))
             tail = f.read(take).decode(errors="ignore")
-        if re.search(r"End of program", tail, re.IGNORECASE) or re.search(r"WallClock|Wallclock", tail, re.IGNORECASE):
+        if re.search(r"End of program", tail, re.IGNORECASE) or re.search(r"\bWall[Cc]lock\b", tail):
             return True
     except Exception:
         pass
@@ -348,7 +348,6 @@ def build_gamd_chain(run_dir, combined, base_dir, conf):
     _ensure_job_name(equil_sh, f"{combined}-gamd-equil")
     _ensure_job_name(prod_sh,  f"{combined}-gamd-prod")
     _ensure_job_name(npt1_sh,  f"{combined}-gamd-npt1")
-    _replace_in_file(npt1_sh, r"(--job-name=).*", f"--job-name={combined}-gamd-npt1")
     for i in range(2, 9):
         sh = os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh")
         if os.path.isfile(sh):
@@ -398,6 +397,63 @@ def submit_gamd_chain(sbatch, sbatch_extra, scripts):
         dep = jid
     return ok, ", ".join(msgs)
 
+def _collect_stage_scripts_for_name(namd_proc_dir, name):
+    gdir = os.path.join(namd_proc_dir, name, "gamd")
+    stages = []
+    equil = os.path.join(gdir, f"{name}-gamd-equil.sh")
+    if os.path.isfile(equil):
+        stages.append(("equil", equil))
+    npts = sorted(glob.glob(os.path.join(gdir, f"{name}-gamd-npt*.sh")), key=lambda p: int(re.search(r'npt(\d+)\.sh$', p).group(1)) if re.search(r'npt(\d+)\.sh$', p) else 9999)
+    for sh in npts:
+        m = re.search(r'npt(\d+)\.sh$', sh)
+        if m:
+            stages.append((f"npt{m.group(1)}", sh))
+    return stages
+
+def _squeue_map():
+    try:
+        r = subprocess.run(["squeue", "-o", "%i %T %j", "-h"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3)
+        mp = {}
+        if r.returncode == 0:
+            for ln in r.stdout.splitlines():
+                parts = ln.strip().split(maxsplit=2)
+                if len(parts) == 3:
+                    jid, state, jname = parts
+                    mp[jname.strip()] = (jid.strip(), state.strip())
+        return mp
+    except Exception:
+        return {}
+
+def _progress_for_name(namd_proc_dir, name, sqmap):
+    stages = _collect_stage_scripts_for_name(namd_proc_dir, name)
+    if not stages:
+        return "[not-prepared]"
+    done = 0
+    first_pending = None
+    for tag, sh in stages:
+        if _log_done_for(sh):
+            done += 1
+        elif first_pending is None:
+            first_pending = (tag, sh)
+    total = len(stages)
+    if done >= total:
+        return f"[{done}/{total} done]"
+    nxt = first_pending[0]
+    jn = f"{name}-gamd-{nxt}"
+    state = None
+    if jn in sqmap:
+        state = sqmap[jn][1]
+    if state:
+        return f"[{done}/{total} next={nxt}:{state}]"
+    return f"[{done}/{total} next={nxt}]"
+
+def _names_with_progress(namd_proc_dir, names):
+    sq = _squeue_map()
+    out = []
+    for n in names:
+        out.append(f"{n} {_progress_for_name(namd_proc_dir, n, sq)}")
+    return out
+
 def compute_input_y(stdscr, names, ready, selection):
     h, w = stdscr.getmaxyx()
     names_lines = max(1, len(wrap_line(" ".join(names), max(10, w - 4))))
@@ -430,8 +486,9 @@ def draw(stdscr, title, hint_attr, namd_proc_dir, names, ready, selection, curso
         y += 1
     except curses.error:
         y = 12
-    hi_idx = cursor_idx if (names and focus == "proc") else None
-    lines_used = wrap_tokens(stdscr, y, 2, w, names, hi_idx=hi_idx, attr_hi=curses.A_REVERSE, attr_norm=0)
+    annotated = _names_with_progress(namd_proc_dir, names)
+    hi_idx = cursor_idx if (annotated and focus == "proc") else None
+    lines_used = wrap_tokens(stdscr, y, 2, w, annotated, hi_idx=hi_idx, attr_hi=curses.A_REVERSE, attr_norm=0)
     cur_y = y + max(1, lines_used)
     try:
         stdscr.addstr(cur_y, 2, "Already GaMD-prepared:", curses.A_UNDERLINE)
@@ -579,7 +636,7 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
                 choice = menu_cursor
             elif focus == "proc":
                 if names:
-                    n = names[proc_cursor]
+                    n = names[proc_cursor].split()[0]
                     if n in selection:
                         selection.discard(n)
                     else:
@@ -599,21 +656,23 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
         if choice is None:
             continue
         if choice == 0:
-            nonprepared = [t for t in names if t not in ready]
+            nonprepared = [t for t in names if t.split()[0] not in ready]
+            nonprepared = [t.split()[0] for t in nonprepared]
             if not nonprepared:
                 draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, cfgs, "All detected appear GaMD-prepared", err_attr, err_attr)
                 stdscr.getch()
             else:
                 selection.update(nonprepared)
         elif choice == 1:
-            selection = set(names)
+            selection = set([t.split()[0] for t in names])
         elif choice == 2:
             y_in = compute_input_y(stdscr, names, ready, selection)
             s = prompt(stdscr, EXAMPLES_ADD, hint_attr, y_start=y_in)
             if s:
-                toks = tokens_from(s)
-                invalid = [t for t in toks if t not in names]
-                valid = [t for t in toks if t in names]
+                toks_all = tokens_from(s)
+                base_names = [t.split()[0] for t in names]
+                invalid = [t for t in toks_all if t not in base_names]
+                valid = [t for t in toks_all if t in base_names]
                 if valid:
                     selection.update(valid)
                 if invalid:
@@ -624,8 +683,9 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
             s = prompt(stdscr, EXAMPLES_REMOVE, hint_attr, y_start=y_in)
             if s:
                 toks = tokens_from(s)
-                not_in_list = [t for t in toks if t not in names]
-                not_selected = [t for t in toks if t in names and t not in selection]
+                base_names = [t.split()[0] for t in names]
+                not_in_list = [t for t in toks if t not in base_names]
+                not_selected = [t for t in toks if t in base_names and t not in selection]
                 to_remove = [t for t in toks if t in selection]
                 for t in to_remove:
                     selection.discard(t)
@@ -638,7 +698,7 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
         elif choice == 4:
             selection = set()
         elif choice == 5:
-            ok, msg = submit_selected(stdscr, namd_proc_dir, selection, base_dir, conf, sbatch, sbatch_extra, hint_attr, err_attr)
+            ok, msg = submit_selected(stdscr, namd_proc_dir, selection, ROOT_DIR, conf, sbatch, sbatch_extra, hint_attr, err_attr)
             draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, cfgs, msg, 0 if ("failed=0" in msg) else err_attr, err_attr)
             stdscr.getch()
         elif choice == options_len - 1:
