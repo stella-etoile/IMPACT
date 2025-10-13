@@ -64,6 +64,7 @@ def init_colors():
             curses.init_pair(10, 244, -1)
             hint_attr = curses.color_pair(10)
         curses.init_pair(11, curses.COLOR_YELLOW, -1)
+        curses.init_pair(12, curses.COLOR_GREEN, -1)
     return err_attr, hint_attr
 
 def wrap_line(s, w):
@@ -424,10 +425,10 @@ def _squeue_map():
     except Exception:
         return {}
 
-def _progress_for_name(namd_proc_dir, name, sqmap):
+def _progress_tuple(namd_proc_dir, name, sqmap):
     stages = _collect_stage_scripts_for_name(namd_proc_dir, name)
     if not stages:
-        return "[not-prepared]"
+        return (name, 0, 0, "-", "-", "[not-prepared]")
     done = 0
     first_pending = None
     for tag, sh in stages:
@@ -436,27 +437,62 @@ def _progress_for_name(namd_proc_dir, name, sqmap):
         elif first_pending is None:
             first_pending = (tag, sh)
     total = len(stages)
-    if done >= total:
-        return f"[{done}/{total} done]"
+    if done >= total and total > 0:
+        return (name, done, total, "-", "-", "[done]")
+    if first_pending is None:
+        return (name, done, total, "-", "-", "[not-prepared]")
     nxt = first_pending[0]
     jn = f"{name}-gamd-{nxt}"
-    state = None
+    jid, state = "-", None
     if jn in sqmap:
-        state = sqmap[jn][1]
-    if state:
-        return f"[{done}/{total} next={nxt}:{state}]"
-    return f"[{done}/{total} next={nxt}]"
+        jid, state = sqmap[jn]
+    return (name, done, total, nxt, jid, state or "-")
 
-def _names_with_progress(namd_proc_dir, names):
+def _status_items(namd_proc_dir, names):
     sq = _squeue_map()
     out = []
     for n in names:
-        out.append(f"{n} {_progress_for_name(namd_proc_dir, n, sq)}")
+        out.append(_progress_tuple(namd_proc_dir, n, sq))
     return out
+
+def _draw_status_table(stdscr, y, x, w, items, cursor_idx, focused, hint_attr):
+    if w < 40:
+        lines = [" ".join([f"{a} [{b}/{c}]", f"next={d}", f"jid={e}", f"{f}"]).strip() for (a,b,c,d,e,f) in items]
+        hi_idx = cursor_idx if focused else None
+        return wrap_tokens(stdscr, y, x, w, lines, hi_idx=hi_idx, attr_hi=curses.A_REVERSE, attr_norm=0)
+    name_w = max(12, min(32, max((len(a) for a,_,_,_,_,_ in items), default=12)))
+    prog_w = 9
+    next_w = 8
+    jid_w = 8
+    state_w = max(8, min(16, max((len(f) for *_, f in items), default=8)))
+    header = f"{'System'.ljust(name_w)}  {'Done'.ljust(prog_w)}  {'Next'.ljust(next_w)}  {'JID'.ljust(jid_w)}  {'State'.ljust(state_w)}"
+    try:
+        stdscr.addstr(y, x, header, curses.A_UNDERLINE)
+    except curses.error:
+        pass
+    yy = y + 1
+    for i, (a,b,c,d,e,f) in enumerate(items):
+        prog = f"{b}/{c}".ljust(prog_w)
+        line = f"{a.ljust(name_w)}  {prog}  {d.ljust(next_w)}  {str(e).ljust(jid_w)}  {f.ljust(state_w)}"
+        attr = 0
+        if f in ("RUNNING","COMPLETING"):
+            attr = curses.color_pair(11) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD
+        if f in ("COMPLETED","[done]"):
+            attr = curses.color_pair(12) if curses.has_colors() else 0
+        if focused and i == cursor_idx:
+            attr |= curses.A_REVERSE
+        try:
+            stdscr.addstr(yy + i, x, line[: max(0, w - x - 2)], attr)
+        except curses.error:
+            pass
+    return 1 + len(items)
+
+def _names_with_progress(namd_proc_dir, names):
+    return _status_items(namd_proc_dir, names)
 
 def compute_input_y(stdscr, names, ready, selection):
     h, w = stdscr.getmaxyx()
-    names_lines = max(1, len(wrap_line(" ".join(names), max(10, w - 4))))
+    names_lines = 1 + len(names)
     ready_line = " ".join(sorted(set(names) & set(ready))) or "(none)"
     ready_lines = max(1, len(wrap_line(ready_line, max(10, w - 4))))
     sel_line = " ".join(sorted(selection)) if selection else "(empty)"
@@ -486,9 +522,8 @@ def draw(stdscr, title, hint_attr, namd_proc_dir, names, ready, selection, curso
         y += 1
     except curses.error:
         y = 12
-    annotated = _names_with_progress(namd_proc_dir, names)
-    hi_idx = cursor_idx if (annotated and focus == "proc") else None
-    lines_used = wrap_tokens(stdscr, y, 2, w, annotated, hi_idx=hi_idx, attr_hi=curses.A_REVERSE, attr_norm=0)
+    items = _names_with_progress(namd_proc_dir, names)
+    lines_used = _draw_status_table(stdscr, y, 2, w, items, cursor_idx, focus == "proc", hint_attr)
     cur_y = y + max(1, lines_used)
     try:
         stdscr.addstr(cur_y, 2, "Already GaMD-prepared:", curses.A_UNDERLINE)
@@ -636,7 +671,7 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
                 choice = menu_cursor
             elif focus == "proc":
                 if names:
-                    n = names[proc_cursor].split()[0]
+                    n = names[proc_cursor]
                     if n in selection:
                         selection.discard(n)
                     else:
@@ -656,21 +691,20 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
         if choice is None:
             continue
         if choice == 0:
-            nonprepared = [t for t in names if t.split()[0] not in ready]
-            nonprepared = [t.split()[0] for t in nonprepared]
+            nonprepared = [t for t in names if t not in ready]
             if not nonprepared:
                 draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, cfgs, "All detected appear GaMD-prepared", err_attr, err_attr)
                 stdscr.getch()
             else:
                 selection.update(nonprepared)
         elif choice == 1:
-            selection = set([t.split()[0] for t in names])
+            selection = set(names)
         elif choice == 2:
             y_in = compute_input_y(stdscr, names, ready, selection)
             s = prompt(stdscr, EXAMPLES_ADD, hint_attr, y_start=y_in)
             if s:
                 toks_all = tokens_from(s)
-                base_names = [t.split()[0] for t in names]
+                base_names = names
                 invalid = [t for t in toks_all if t not in base_names]
                 valid = [t for t in toks_all if t in base_names]
                 if valid:
@@ -683,7 +717,7 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
             s = prompt(stdscr, EXAMPLES_REMOVE, hint_attr, y_start=y_in)
             if s:
                 toks = tokens_from(s)
-                base_names = [t.split()[0] for t in names]
+                base_names = names
                 not_in_list = [t for t in toks if t not in base_names]
                 not_selected = [t for t in toks if t in base_names and t not in selection]
                 to_remove = [t for t in toks if t in selection]
