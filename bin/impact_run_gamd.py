@@ -271,6 +271,21 @@ def sbatch_submit(sbatch, script_path, extra=None, dependency=None, cwd=None):
     out = r.stdout.strip() if r.stdout else r.stderr.strip()
     return ok, parse_jobid(out), out
 
+def _log_done_for(script_path):
+    log_path = re.sub(r"\.sh$", ".log", script_path)
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            take = min(size, 1_000_000)
+            f.seek(size - take)
+            tail = f.read(take).decode(errors="ignore")
+        if re.search(r"End of program", tail, re.IGNORECASE) or re.search(r"WallClock|Wallclock", tail, re.IGNORECASE):
+            return True
+    except Exception:
+        pass
+    return False
+
 def build_gamd_chain(run_dir, combined, base_dir, conf):
     aux_dir = os.path.join(base_dir, "aux")
     script_dir = os.path.join(base_dir, "gen_scripts")
@@ -332,7 +347,8 @@ def build_gamd_chain(run_dir, combined, base_dir, conf):
             _ensure_slurm_header(sh, account, part, exclude=exclude, ntasks_per_node=ntasks, num_gpu=num_gpu, qos=qos, wall_time=wall_pr or None)
     _ensure_job_name(equil_sh, f"{combined}-gamd-equil")
     _ensure_job_name(prod_sh,  f"{combined}-gamd-prod")
-    _ensure_job_name(npt1_sh,  f"{combined}-gamd-npt1")
+    _ensure_job_name(npt1_sh,  f"{combined}-gamd-npt1}")
+    _replace_in_file(npt1_sh, r"(--job-name=).*", f"--job-name={combined}-gamd-npt1")
     for i in range(2, 9):
         sh = os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh")
         if os.path.isfile(sh):
@@ -348,19 +364,39 @@ def build_gamd_chain(run_dir, combined, base_dir, conf):
     }
     return True, "ok", scripts
 
+def _detect_resume_index(scripts):
+    stages = [scripts["equil"]] + scripts["npt"]
+    done = []
+    for sh in stages:
+        done.append(_log_done_for(sh))
+    idx = 0
+    for i, d in enumerate(done):
+        if d:
+            idx = i + 1
+        else:
+            break
+    if idx >= len(stages):
+        return None, done
+    return idx, done
+
 def submit_gamd_chain(sbatch, sbatch_extra, scripts):
-    ok1, jid1, out1 = sbatch_submit(sbatch, scripts["equil"], extra=sbatch_extra, cwd=os.path.dirname(scripts["equil"]))
-    if not ok1:
-        return False, f"equil submit failed: {out1}"
-    dep = jid1
-    jids = [("equil", jid1)]
-    for i, sh in enumerate(scripts["npt"], start=1):
-        ok, jid, out = sbatch_submit(sbatch, sh, extra=sbatch_extra, dependency=dep, cwd=os.path.dirname(sh))
-        if not ok:
-            return False, f"npt{i} submit failed: {out}"
-        jids.append((f"npt{i}", jid))
+    stages = [("equil", scripts["equil"])] + [(f"npt{i+1}", sh) for i, sh in enumerate(scripts["npt"])]
+    resume_idx, done_flags = _detect_resume_index(scripts)
+    if resume_idx is None:
+        return True, "all stages appear complete"
+    ok = True
+    msgs = []
+    dep = None
+    for i in range(resume_idx, len(stages)):
+        tag, sh = stages[i]
+        s_ok, jid, out = sbatch_submit(sbatch, sh, extra=sbatch_extra, dependency=dep, cwd=os.path.dirname(sh))
+        if not s_ok:
+            ok = False
+            msgs.append(f"{tag} submit failed: {out}")
+            break
+        msgs.append(f"{tag}={jid}")
         dep = jid
-    return True, ", ".join([f"{k}={v}" for k, v in jids])
+    return ok, ", ".join(msgs)
 
 def compute_input_y(stdscr, names, ready, selection):
     h, w = stdscr.getmaxyx()
@@ -458,6 +494,28 @@ def prompt(stdscr, top_line, hint_attr, y_start=None):
     if cancelled["v"]:
         return None
     return s
+
+def submit_selected(stdscr, namd_proc_dir, selection, base_dir, conf, sbatch, sbatch_extra, hint_attr, err_attr):
+    if not selection:
+        return False, "Selection is empty"
+    okc = 0
+    failc = 0
+    last = ""
+    for combined in sorted(selection):
+        run_dir = os.path.join(namd_proc_dir, combined)
+        ok_b, det_b, scripts = build_gamd_chain(run_dir, combined, base_dir, conf)
+        if not ok_b:
+            failc += 1
+            last = f"{combined}: {det_b}"
+            continue
+        ok_s, det_s = submit_gamd_chain(sbatch, sbatch_extra, scripts)
+        if ok_s:
+            okc += 1
+            last = f"{combined}: {det_s}"
+        else:
+            failc += 1
+            last = f"{combined}: {det_s}"
+    return True, f"Chains submitted={okc} failed={failc}. {last}"
 
 def run_run_gamd(stdscr, inherited_hint_attr=None):
     namd_proc_dir, conf_path = read_config()
@@ -580,29 +638,9 @@ def run_run_gamd(stdscr, inherited_hint_attr=None):
         elif choice == 4:
             selection = set()
         elif choice == 5:
-            if not selection:
-                draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, cfgs, "Selection is empty", err_attr, err_attr)
-                stdscr.getch()
-            else:
-                okc = 0
-                failc = 0
-                last = ""
-                for combined in sorted(selection):
-                    run_dir = os.path.join(namd_proc_dir, combined)
-                    ok_b, det_b, scripts = build_gamd_chain(run_dir, combined, base_dir, conf)
-                    if not ok_b:
-                        failc += 1
-                        last = f"{combined}: {det_b}"
-                        continue
-                    ok_s, det_s = submit_gamd_chain(sbatch, sbatch_extra, scripts)
-                    if ok_s:
-                        okc += 1
-                        last = f"{combined}: {det_s}"
-                    else:
-                        failc += 1
-                        last = f"{combined}: {det_s}"
-                draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, cfgs, f"Chains submitted={okc} failed={failc}. {last}", 0 if failc==0 else err_attr, err_attr)
-                stdscr.getch()
+            ok, msg = submit_selected(stdscr, namd_proc_dir, selection, base_dir, conf, sbatch, sbatch_extra, hint_attr, err_attr)
+            draw(stdscr, SUBTITLE, hint_attr, namd_proc_dir, names, ready, selection, proc_cursor, focus, menu_cursor, cfgs, msg, 0 if ("failed=0" in msg) else err_attr, err_attr)
+            stdscr.getch()
         elif choice == options_len - 1:
             return
 
