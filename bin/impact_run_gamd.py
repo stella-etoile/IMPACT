@@ -347,7 +347,7 @@ def build_gamd_chain(run_dir, combined, base_dir, conf):
             _ensure_slurm_header(sh, account, part, exclude=exclude, ntasks_per_node=ntasks, num_gpu=num_gpu, qos=qos, wall_time=wall_pr or None)
     _ensure_job_name(equil_sh, f"{combined}-gamd-equil")
     _ensure_job_name(prod_sh,  f"{combined}-gamd-prod")
-    _ensure_job_name(npt1_sh,  f"{combined}-gamd-npt1}")
+    _ensure_job_name(npt1_sh,  f"{combined}-gamd-npt1")
     _replace_in_file(npt1_sh, r"(--job-name=).*", f"--job-name={combined}-gamd-npt1")
     for i in range(2, 9):
         sh = os.path.join(gamd_dir, f"{combined}-gamd-npt{i}.sh")
