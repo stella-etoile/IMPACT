@@ -329,6 +329,7 @@ def build_gamd_chain(run_dir, combined, base_dir, conf):
             shutil.copy2(npt1_sh, next_sh)
         _replace_in_file(next_conf, r'\bnpt\d+\b', f"npt{next_i}")
         _replace_in_file(next_sh,  r'\bnpt\d+\b', f"npt{next_i}")
+        _replace_in_file(next_conf, '-equil', f"npt{i}")
         if i >= 2:
             _remove_in_file(next_conf, r'\breinitvels\s+\$temperature\b')
     account   = conf.get("SLURM_ACCOUNT", "").strip()
